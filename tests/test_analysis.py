@@ -28,6 +28,14 @@ def test_summary_stats_are_exact_and_labelled():
     assert "min at Metal" in stats
 
 
+def test_summary_stats_state_first_to_last_change_for_time_series():
+    df = pd.DataFrame(
+        {"year": [2011, 2009, 2010], "sales": [450.58, 449.46, 481.45]}  # unsorted on purpose
+    )
+    stats = summary_stats(df)
+    assert "sales from year=2009 to year=2011: 449.46 -> 450.58 (overall change +1.12" in stats
+
+
 # ---------------------------------------------------------------------------- charts
 @pytest.mark.parametrize(
     "df, kind, x",

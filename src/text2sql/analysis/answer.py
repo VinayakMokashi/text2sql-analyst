@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from text2sql.analysis.columns import is_id_column, measure_columns
+from text2sql.analysis.columns import is_id_column, is_time_column, measure_columns
 from text2sql.execution.executor import QueryResult
 from text2sql.llm.base import LLM
 from text2sql.prompts import analysis_prompt
@@ -53,6 +53,26 @@ def summary_stats(df: pd.DataFrame) -> str:
             share = series.max() / series.sum() * 100 if series.sum() else 0
             line += f"; max at {label_col}={top} ({share:.1f}% of total); min at {bottom}"
         lines.append(line)
+
+    # For time series, state the overall direction explicitly: comparing the first and
+    # last periods is exactly the kind of arithmetic models get wrong on their own.
+    time_cols = [c for c in labels if is_time_column(df, c)]
+    if time_cols and len(df) > 1:
+        tcol = time_cols[0]
+        ordered = df.sort_values(tcol)
+        for col in measures:
+            valid = ordered[[tcol, col]].dropna()
+            if len(valid) < 2:
+                continue
+            # Index each column separately: a mixed-type row would upcast 2009 to 2009.0.
+            t0, t1 = valid[tcol].iloc[0], valid[tcol].iloc[-1]
+            v0, v1 = valid[col].iloc[0], valid[col].iloc[-1]
+            change = v1 - v0
+            pct = f", {change / v0 * 100:+.1f}%" if v0 else ""
+            lines.append(
+                f"{col} from {tcol}={t0} to {tcol}={t1}: {_fmt(v0)} -> {_fmt(v1)} "
+                f"(overall change {change:+,.2f}{pct})"
+            )
     return "\n".join(lines) if lines else "(no numeric columns)"
 
 
@@ -86,7 +106,7 @@ class Analyst:
             result_table_text(df, self._max_rows),
             summary_stats(df),
         )
-        resp = self._llm.complete(system, user, temperature=0.2, max_tokens=500)
+        resp = self._llm.complete(system, user, temperature=0.2, max_tokens=1200)
         data = parse_json_object(resp.text)
         if data is None or not str(data.get("answer", "")).strip():
             # Still useful: show whatever the model wrote rather than nothing.
