@@ -11,7 +11,58 @@ It is a small, readable implementation of a retrieval-augmented Text-to-SQL pipe
 built entirely on free and open-source pieces: open-weight LLMs (served for free by
 Groq, or locally with Ollama), a local embedding model, ChromaDB and SQLite.
 
-<!-- EXAMPLE -->
+![Answer with analysis and chart](docs/images/answer-bar-chart.png)
+
+### Example
+
+**Question:** *Which 5 genres generate the most revenue?*
+
+> **Rock is the top revenue-generating genre with $826.65, followed by Latin ($382.14)
+> and Metal ($261.36).**
+>
+> - Rock accounts for 45.8% of the total revenue across these top five genres.
+> - There is a significant revenue gap between the top genre (Rock) and the second
+>   (Latin), with Rock generating more than double the revenue of Latin.
+> - TV Shows has the lowest revenue among the top five, at $93.53, which is less than
+>   12% of Rock's revenue.
+>
+> *Caveats: This analysis only covers the top 5 genres; revenue from other genres is not
+> included in the total of $1,805.24.*
+
+| genre | total_revenue |
+|---|---|
+| Rock | 826.65 |
+| Latin | 382.14 |
+| Metal | 261.36 |
+| Alternative & Punk | 241.56 |
+| TV Shows | 93.53 |
+
+<details>
+<summary>Generated SQL (hidden by default, one click away in the app)</summary>
+
+```sql
+SELECT
+    g.Name AS genre,
+    ROUND(SUM(il.UnitPrice * il.Quantity), 2) AS total_revenue
+FROM InvoiceLine il
+JOIN Track t      ON il.TrackId = t.TrackId
+JOIN Genre g      ON t.GenreId = g.GenreId
+GROUP BY g.GenreId, g.Name
+ORDER BY total_revenue DESC
+LIMIT 5
+```
+
+Tables found by vector search: Genre, Track, InvoiceLine, Artist, Invoice, Album.
+Tables kept by the LLM: Genre, Track, InvoiceLine. Total time: 1.8 s.
+</details>
+
+Trends get a line chart, and the answer states the overall change exactly:
+
+![Year-over-year trend](docs/images/answer-trend.png)
+
+When the data cannot answer a question, it says so instead of guessing:
+
+![Declined question](docs/images/declined.png)
 
 ---
 
@@ -88,9 +139,11 @@ flowchart TB
    retrieved. This step favors recall.
 2. **LLM table selection** ([`retrieval/selector.py`](src/text2sql/retrieval/selector.py)).
    A fast model reads the candidates' descriptions and columns and keeps only the
-   tables it needs (at most K, default 4). This step favors precision. It can also
-   decide that the question **cannot be answered** from this data ("What is the weather
-   tomorrow?"), and the pipeline then says so instead of guessing.
+   tables it needs (at most K, default 4). This step favors precision. The model also
+   sees the *names* of all other tables, so it can still pick a table that vector search
+   ranked just below the cut-off. It can also decide that the question **cannot be
+   answered** from this data ("What is the weather tomorrow?"), and the pipeline then
+   says so instead of guessing.
 3. **Join-path expansion** ([`retrieval/joins.py`](src/text2sql/retrieval/joins.py)).
    "Revenue per genre" needs `Genre` and `InvoiceLine`, but they only connect through
    `Track`, which the question never mentions. A shortest-path search over the
@@ -214,6 +267,7 @@ Type a question or click an example in the sidebar. Each answer shows:
 python -m text2sql ask "Who are the top 5 customers by total spending?"
 python -m text2sql ask "How did revenue change year over year?" --no-sql
 python -m text2sql tables            # list tables and their generated descriptions
+python -m text2sql models            # list the models your provider/key can use today
 python -m text2sql index --refresh   # regenerate the table descriptions
 ```
 
@@ -275,29 +329,38 @@ The pipeline uses **two model roles**:
 
 | Role | Used for | Default (Groq) | Why |
 |---|---|---|---|
-| **SQL model** (`T2S_SQL_MODEL`) | SQL generation and repair | `llama-3.3-70b-versatile` | Accuracy matters most here; a 70B open model is strong at SQL |
-| **Helper model** (`T2S_HELPER_MODEL`) | table descriptions, table selection, analysis | `llama-3.1-8b-instant` | Easier tasks; a small model is fast and has much higher free-tier limits |
+| **SQL model** (`T2S_SQL_MODEL`) | SQL generation and repair | `openai/gpt-oss-120b` | Accuracy matters most here. The largest open-weight model on Groq's free tier (a 117B mixture-of-experts, Apache 2.0) reasons briefly before writing SQL |
+| **Helper model** (`T2S_HELPER_MODEL`) | table descriptions, table selection, analysis | `qwen/qwen3.8-27b` | Easier tasks, where speed matters: about 0.2 s per call and accurate. Using a second model also gives a second free-tier quota |
+
+See [Evaluation](#evaluation) for how these compare on the question set.
 
 Why a hosted default rather than a local one? Running a 7B model on a typical laptop
-CPU takes 15–40 s per question and needs a 4–5 GB download. Groq serves the same
-open-weight models for free in about 1–3 s, which suits a demo. Everything still works
-fully offline with Ollama if you prefer.
+CPU takes 15–40 s per question and needs a 4–5 GB download. Groq serves open-weight
+models for free and answers in about 1–3 s per question, which suits a demo.
+Everything still works fully offline with Ollama if you prefer.
+
+**Reasoning models.** gpt-oss and Qwen3-family models can "think" before answering. The
+thinking is returned separately (or stripped from `<think>` tags), so it never leaks into
+the SQL. Set `T2S_SQL_REASONING_EFFORT` / `T2S_HELPER_REASONING_EFFORT` to `low`,
+`medium` or `high` to trade speed for accuracy.
 
 ### Provider presets
 
 | `T2S_LLM_PROVIDER` | Key variable | Notes |
 |---|---|---|
-| `groq` (default) | `GROQ_API_KEY` | Free tier, very fast. Llama 3.x, Qwen3, gpt-oss and other open models |
+| `groq` (default) | `GROQ_API_KEY` | Free tier, very fast. Open-weight models such as gpt-oss and Qwen |
 | `cerebras` | `CEREBRAS_API_KEY` | Free tier, very fast |
 | `openrouter` | `OPENROUTER_API_KEY` | `:free` models (e.g. Qwen2.5-Coder-32B) have low daily limits |
 | `ollama` | none | Local; see below |
 | `openai_compatible` | `T2S_LLM_API_KEY` | Any OpenAI-style endpoint via `T2S_LLM_BASE_URL` (vLLM, LM Studio, ...) |
 | `fake` | none | Deterministic replies; used by the tests |
 
-Free-tier limits change over time; check your provider's console. On Groq, the
-per-day token limit of the 70B model (roughly 100k tokens/day at the time of writing)
-is enough for about 50–70 questions. If you hit it, switch `T2S_SQL_MODEL` to a model
-with a larger quota, such as `qwen/qwen3-32b` or `llama-3.1-8b-instant`.
+Free-tier model lists and limits change over time. Run `python -m text2sql models`
+to see what your key can use today, and check your provider's console for quotas. At the
+time of writing, Groq allows each model 1,000 requests per day and 8,000 tokens per
+minute. One question makes 3 requests and uses roughly 2–3k tokens per model, so a
+burst of questions may pause briefly: rate-limit responses are retried automatically
+after the wait the server asks for.
 
 ### Run fully offline with Ollama
 
@@ -354,15 +417,64 @@ no ties at a "top 5" cut-off).
 
 ### Results
 
-<!-- EVAL_RESULTS -->
+All models are open-weight and were served by Groq's free tier. The helper model
+(`qwen/qwen3.8-27b`) handled table selection for every run, and its choice was shared,
+so each SQL model saw exactly the same tables. The full logs, with every generated query,
+are in [`eval/results/`](eval/results/).
+
+| SQL model | EX (43 answerable) | Easy | Medium | Hard | Declined unanswerable | False refusals | Table recall@6 | Final schema recall | Avg SQL latency |
+|---|---|---|---|---|---|---|---|---|---|
+| `openai/gpt-oss-120b` (default) | **100%** | 100% | 100% | 100% | 4/4 | 0 | 99.2% | 100% | 0.95 s |
+| `openai/gpt-oss-20b` | **97.7%** | 100% | 100% | 92.9% | 4/4 | 0 | 99.2% | 100% | 0.79 s |
+
+*Avg SQL latency* is the model's response time plus query execution, averaged over the
+questions that reached SQL generation. It excludes time spent waiting out free-tier
+rate limits.
+
+**Takeaways**
+
+- On a schema this size, both models get nearly everything right once the right tables
+  are in the prompt. The bigger model's advantage shows only on the hard questions.
+- The one `gpt-oss-20b` miss (h13) was really a formatting difference: it answered
+  "Edwards, Nancy", while the gold answer has first and last name as separate values. A
+  human would mark it correct; strict execution accuracy does not.
+- No query needed self-correction in these runs. The repair loop is exercised by the unit
+  tests, and in practice it matters more for smaller local models.
+
+**Error analysis: what the first run taught us.** The first (baseline) run scored lower,
+because of three **false refusals**, questions the system declined although the data
+could answer them:
+
+| Run | `gpt-oss-120b` | `gpt-oss-20b` | False refusals (both models) |
+|---|---|---|---|
+| Baseline ([`eval/results/baseline/`](eval/results/baseline/)) | 95.3% | 93.0% | 2 + 2 |
+| After the two fixes below | 100% | 97.7% | 0 + 0 |
+
+1. **A needed table ranked 7th in vector search** ("top genres by *tracks sold*" needs
+   `InvoiceLine`), so the selector concluded there was no sales data. *Fix:* the selector
+   now sees the other table names too, and may pick any of them.
+2. **The SQL model was overly literal.** For "revenue from customers in the USA", it
+   refused because there is no customer-country column among the selected tables, although
+   `Invoice.BillingCountry` answers it. *Fix:* the prompt allows a close proxy column and
+   reserves `CANNOT_ANSWER` for questions nothing in the schema can answer.
+
+Both fixes are general (neither mentions a specific question). All four genuinely
+unanswerable questions are still declined. The caveat is that the same 47 questions
+were used to find the problems and to measure the fixes, so treat these numbers as
+optimistic; see [Limitations](#limitations-and-future-work).
 
 ### Rerun it
 
 ```bash
 python eval/run_eval.py                                              # model from .env
-python eval/run_eval.py --models llama-3.3-70b-versatile qwen/qwen3-32b llama-3.1-8b-instant
+python eval/run_eval.py --models openai/gpt-oss-120b openai/gpt-oss-20b qwen/qwen3.8-27b
 python eval/run_eval.py --ids h01 h02 --sleep 0                      # a few questions
 ```
+
+A full run makes about 2 LLM calls per question per model. With Groq's free tier
+(200k tokens per model per day at the time of writing), plan roughly one full run per
+model per day. That is why `qwen/qwen3.8-27b`, which already serves as the helper model,
+is not in the table above; the command above includes it if you want to compare.
 
 The script writes a per-question log (`eval/results/<model>.jsonl`) with every SQL
 query and failure reason, plus `summary.md` and `summary.json`. The helper model stays
@@ -421,7 +533,7 @@ text2sql-analyst/
 ### Tests
 
 ```bash
-pytest          # about 90 tests, a few seconds, no network or API key needed
+pytest          # about 100 tests, a few seconds, no network or API key needed
 ruff check .
 ```
 
@@ -450,7 +562,9 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   statistics, but it is generated text. The SQL and table are shown so you can verify.
 - **A small, self-written eval set.** 47 questions are enough to compare models, not to
   claim benchmark numbers. The questions were written by the same person who built the
-  system, which risks optimistic bias.
+  system, and two prompt fixes were made after looking at failures on this same set, so
+  the scores are optimistic. A held-out set or a public benchmark would be the honest
+  next step.
 - **Free-tier limits.** Hosted free tiers cap requests and tokens per day.
 
 **Possible improvements**
@@ -475,9 +589,10 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
 - **Chinook database** by Luis Rocha: <https://github.com/lerocha/chinook-database>
   (MIT License)
 - **Models** (open weights, each under its own license):
-  - Meta Llama 3.3 70B Instruct and Llama 3.1 8B Instruct (Llama 3.3 / 3.1 Community
-    License)
-  - Qwen3 (Apache 2.0) and Qwen2.5-Coder (Apache 2.0) from Alibaba Qwen
+  - [gpt-oss-120b and gpt-oss-20b](https://huggingface.co/openai/gpt-oss-120b) by
+    OpenAI, open-weight (Apache 2.0)
+  - [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Alibaba Qwen (Apache 2.0);
+    Qwen2.5-Coder (Apache 2.0) is suggested for local use
   - `BAAI/bge-small-en-v1.5` embeddings (MIT)
 - **Libraries**: [sqlglot](https://github.com/tobymao/sqlglot) (MIT),
   [ChromaDB](https://github.com/chroma-core/chroma) (Apache 2.0),
