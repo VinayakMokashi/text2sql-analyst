@@ -1,0 +1,6 @@
+[client]
+# Hide Streamlit's developer toolbar (Deploy button etc.) for a cleaner demo.
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
