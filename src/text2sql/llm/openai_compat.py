@@ -1,6 +1,6 @@
 """Client for any OpenAI-compatible chat endpoint.
 
-Groq, Cerebras, GitHub Models, OpenRouter and Ollama all expose the same
+Groq, Cerebras, OpenRouter, Ollama, vLLM and LM Studio all expose the same
 ``/chat/completions`` API, so a single implementation covers every provider; only
 the base URL, the API key and the model name differ.
 """

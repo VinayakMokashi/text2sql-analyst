@@ -32,11 +32,6 @@ PRESETS: dict[str, ProviderPreset] = {
     "cerebras": ProviderPreset(
         "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "https://cloud.cerebras.ai"
     ),
-    "github": ProviderPreset(
-        "https://models.github.ai/inference",
-        "GITHUB_TOKEN",
-        "https://github.com/settings/tokens (needs the models:read permission)",
-    ),
     "openrouter": ProviderPreset(
         "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "https://openrouter.ai/keys"
     ),

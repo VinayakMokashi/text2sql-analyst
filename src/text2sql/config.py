@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # --- LLM -----------------------------------------------------------------------
     llm_provider: str = Field(
         "groq",
-        description="groq | cerebras | github | openrouter | ollama | openai_compatible | fake",
+        description="groq | cerebras | openrouter | ollama | openai_compatible | fake",
     )
     llm_base_url: str | None = Field(None, description="Override the provider's endpoint.")
     llm_api_key: SecretStr | None = Field(None, description="Overrides provider key vars.")
