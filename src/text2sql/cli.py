@@ -3,6 +3,7 @@
 python -m text2sql index              # build the table index (once per database)
 python -m text2sql ask "question"     # answer a question
 python -m text2sql tables             # show indexed tables and their descriptions
+python -m text2sql models             # list the models your provider/key can use
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from text2sql.config import Settings
 from text2sql.db import read_schema
 from text2sql.indexing import build_index, load_descriptions
 from text2sql.llm import LLMError, create_llm
+from text2sql.llm.openai_compat import OpenAICompatibleLLM
 from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
 
 console = Console()
@@ -64,6 +66,19 @@ def cmd_tables(args: argparse.Namespace) -> int:
     for t in read_schema(s.db_path, sample_rows=0):
         table.add_row(t.name, f"{t.row_count:,}", docs.get(t.name, "[dim](not indexed)[/]"))
     console.print(table)
+    return 0
+
+
+def cmd_models(args: argparse.Namespace) -> int:
+    s = _settings(args)
+    llm = create_llm(s, "helper")
+    if not isinstance(llm, OpenAICompatibleLLM):
+        console.print(f"Provider '{s.llm_provider}' has no model list.")
+        return 0
+    console.print(f"Models served by [bold]{s.llm_provider}[/] for your key:")
+    for model_id in llm.list_models():
+        role = {s.sql_model: " <- SQL model", s.helper_model: " <- helper model"}.get(model_id, "")
+        console.print(f"  {model_id}[green]{role}[/]")
     return 0
 
 
@@ -141,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_tables = sub.add_parser("tables", parents=[common], help="list indexed tables")
     p_tables.set_defaults(func=cmd_tables)
+
+    p_models = sub.add_parser("models", parents=[common], help="list available models")
+    p_models.set_defaults(func=cmd_models)
     return parser
 
 
