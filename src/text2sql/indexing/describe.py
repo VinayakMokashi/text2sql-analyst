@@ -23,7 +23,7 @@ def describe_table(table: TableSchema, llm: LLM | None) -> str:
     if llm is None:
         return fallback_description(table)
     system, user = table_description_prompt(table)
-    text = llm.complete(system, user, temperature=0.2, max_tokens=250).text.strip()
+    text = llm.complete(system, user, temperature=0.2, max_tokens=1000).text.strip()
     return text or fallback_description(table)
 
 

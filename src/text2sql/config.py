@@ -9,13 +9,14 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Populate os.environ from .env as well, so provider-specific key variables such as
 # GROQ_API_KEY are visible to the LLM factory even though they have no T2S_ prefix.
-load_dotenv(override=False)
+# The search starts in the working directory, like the relative paths below.
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 class Settings(BaseSettings):
@@ -32,8 +33,11 @@ class Settings(BaseSettings):
     )
     llm_base_url: str | None = Field(None, description="Override the provider's endpoint.")
     llm_api_key: SecretStr | None = Field(None, description="Overrides provider key vars.")
-    sql_model: str = "llama-3.3-70b-versatile"
-    helper_model: str = "llama-3.1-8b-instant"
+    sql_model: str = "openai/gpt-oss-120b"
+    helper_model: str = "qwen/qwen3.8-27b"
+    # Reasoning models (gpt-oss, Qwen3) accept low/medium/high; empty = model default.
+    sql_reasoning_effort: str | None = None
+    helper_reasoning_effort: str | None = None
     llm_timeout_s: float = 60.0
 
     # --- Data & index -----------------------------------------------------------------

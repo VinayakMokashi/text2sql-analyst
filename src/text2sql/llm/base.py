@@ -44,7 +44,9 @@ class LLM(ABC):
         """Send one system + user message pair and return the model's reply.
 
         Temperature defaults to 0 because SQL generation should be as deterministic
-        and reproducible as the provider allows.
+        and reproducible as the provider allows. ``max_tokens`` is a ceiling, not a
+        target: callers keep it generous because reasoning models spend part of it
+        thinking before they write the answer.
         """
         response = self._complete(system, user, temperature, max_tokens)
         response.text = _THINK_RE.sub("", response.text).strip()

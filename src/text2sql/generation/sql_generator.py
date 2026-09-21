@@ -59,7 +59,7 @@ class SQLGenerator:
 
     def generate(self, question: str, tables: list[TableSchema]) -> GeneratedSQL:
         system, user = sql_generation_prompt(question, tables, self.dialect, self.sample_rows)
-        resp = self.llm.complete(system, user, max_tokens=800)
+        resp = self.llm.complete(system, user, max_tokens=2000)
         return parse_reply(resp.text, resp.latency_s)
 
     def repair(
@@ -68,5 +68,5 @@ class SQLGenerator:
         system, user = sql_repair_prompt(
             question, tables, failed_sql, error, self.dialect, self.sample_rows
         )
-        resp = self.llm.complete(system, user, max_tokens=800)
+        resp = self.llm.complete(system, user, max_tokens=2000)
         return parse_reply(resp.text, resp.latency_s)

@@ -8,6 +8,7 @@ the base URL, the API key and the model name differ.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import openai
 
@@ -23,9 +24,11 @@ class OpenAICompatibleLLM(LLM):
         api_key: str,
         timeout_s: float = 60.0,
         max_retries: int = 6,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
+        self.reasoning_effort = reasoning_effort or None
         # The SDK retries 429/5xx with exponential backoff and honours Retry-After,
         # which is exactly what free-tier rate limits need.
         self._client = openai.OpenAI(
@@ -33,6 +36,11 @@ class OpenAICompatibleLLM(LLM):
         )
 
     def _complete(self, system: str, user: str, temperature: float, max_tokens: int) -> LLMResponse:
+        # Sent as a raw body field: not every provider or model knows the parameter,
+        # so it is only included when explicitly configured.
+        extra: dict[str, Any] = (
+            {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
+        )
         start = time.perf_counter()
         try:
             resp = self._client.chat.completions.create(
@@ -43,12 +51,15 @@ class OpenAICompatibleLLM(LLM):
                 ],
                 temperature=temperature,
                 max_tokens=max_tokens,
+                extra_body=extra or None,
             )
         except openai.APIError as exc:  # covers auth, rate limit, connection, 5xx
             raise LLMError(f"{self.provider}/{self.model}: {exc}") from exc
 
         usage = resp.usage
         return LLMResponse(
+            # Reasoning models return their chain of thought in a separate field on
+            # most providers, so ``content`` holds only the final answer.
             text=resp.choices[0].message.content or "",
             model=self.model,
             latency_s=time.perf_counter() - start,

@@ -41,7 +41,7 @@ class TableSelector:
             if c.name.lower() in schemas
         ]
         system, user = table_selection_prompt(question, offered, max_tables)
-        reply = self._llm.complete(system, user, max_tokens=300).text
+        reply = self._llm.complete(system, user, max_tokens=1000).text
         data = parse_json_object(reply)
 
         def top_k_fallback(reason: str) -> TableSelection:

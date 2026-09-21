@@ -75,10 +75,12 @@ def create_llm(settings: Settings, role: Role = "sql", model: str | None = None)
     if not base_url:
         raise ValueError("T2S_LLM_BASE_URL is required for provider 'openai_compatible'.")
 
+    effort = settings.sql_reasoning_effort if role == "sql" else settings.helper_reasoning_effort
     return OpenAICompatibleLLM(
         provider=provider,
         model=name,
         base_url=base_url,
         api_key=_resolve_api_key(settings, preset),
         timeout_s=settings.llm_timeout_s,
+        reasoning_effort=effort,
     )
