@@ -70,9 +70,7 @@ def results_match(gold: Sequence[Sequence[Any]], pred: Sequence[Sequence[Any]]) 
     for mapping in itertools.islice(itertools.product(*candidates), _MAX_MAPPINGS):
         if len(set(mapping)) != len(mapping):
             continue
-        projected = Counter(
-            tuple(pred_cols[j][i] for j in mapping) for i in range(len(pred))
-        )
+        projected = Counter(tuple(pred_cols[j][i] for j in mapping) for i in range(len(pred)))
         if projected == gold_rows:
             return True
     return False

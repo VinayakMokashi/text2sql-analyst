@@ -35,8 +35,11 @@ def test_summary_stats_are_exact_and_labelled():
         (pd.DataFrame({"n": [42]}), "metric", None),
         (GENRES.to_dataframe(), "bar", "genre"),
         (pd.DataFrame({"year": ["2021", "2022", "2023"], "sales": [1, 3, 2]}), "line", "year"),
-        (pd.DataFrame({"month": ["2021-01", "2021-02", "2021-03"], "n": [1, 3, 2]}), "line",
-         "month"),
+        (
+            pd.DataFrame({"month": ["2021-01", "2021-02", "2021-03"], "n": [1, 3, 2]}),
+            "line",
+            "month",
+        ),
     ],
 )
 def test_chart_heuristics(df, kind, x):
@@ -60,8 +63,9 @@ def test_no_chart_when_it_would_mislead(df):
 
 # --------------------------------------------------------------------------- analyst
 def test_analyst_parses_json_answer():
-    llm = FakeLLM(['{"answer": "Rock leads with $826.65.", "insights": ["Rock is 56%"],'
-                   ' "caveats": []}'])
+    llm = FakeLLM(
+        ['{"answer": "Rock leads with $826.65.", "insights": ["Rock is 56%"], "caveats": []}']
+    )
     analysis = Analyst(llm).analyze("Top genres by revenue?", GENRES)
     assert analysis.answer == "Rock leads with $826.65."
     assert analysis.insights == ["Rock is 56%"]

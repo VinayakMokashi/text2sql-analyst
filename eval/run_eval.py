@@ -96,8 +96,10 @@ def evaluate_model(
         }
         records.append(record)
         mark = "PASS" if correct else "FAIL"
-        print(f"  [{n:>2}/{len(questions)}] {mark} {item['id']} {out.total_s:5.1f}s "
-              f"{item['question'][:60]}")
+        print(
+            f"  [{n:>2}/{len(questions)}] {mark} {item['id']} {out.total_s:5.1f}s "
+            f"{item['question'][:60]}"
+        )
         if args.sleep:
             time.sleep(args.sleep)  # stay under free-tier requests-per-minute limits
     return records
@@ -122,9 +124,11 @@ def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         "declined_correctly": f"{sum(r['correct'] for r in unanswerable)}/{len(unanswerable)}",
         "false_refusals": sum(r["status"] == "unanswerable" for r in answerable),
         "recall_at_n": round(100 * statistics.mean(r["recall_at_n"] for r in answerable), 1)
-        if answerable else None,
+        if answerable
+        else None,
         "schema_recall": round(100 * statistics.mean(r["schema_recall"] for r in answerable), 1)
-        if answerable else None,
+        if answerable
+        else None,
         "avg_latency_s": round(statistics.mean(latencies), 2) if latencies else None,
         "median_latency_s": round(statistics.median(latencies), 2) if latencies else None,
         "self_corrected": sum(r["repaired"] for r in records),
@@ -138,6 +142,7 @@ def markdown_table(summaries: list[dict[str, Any]], top_n: int) -> str:
         f"False refusals | Table recall@{top_n} | Final schema recall | Avg latency | "
         "Self-corrected |\n|---|---|---|---|---|---|---|---|---|---|---|"
     )
+
     def p(value: float | None) -> str:
         return "-" if value is None else f"{value}%"
 
@@ -166,13 +171,16 @@ def main() -> int:
     args = parser.parse_args()
 
     questions = load_questions(args.questions, args.ids, args.limit)
-    print(f"{len(questions)} questions | provider {settings.llm_provider} | helper model "
-          f"{args.helper_model or settings.helper_model} | db {settings.db_path}")
+    print(
+        f"{len(questions)} questions | provider {settings.llm_provider} | helper model "
+        f"{args.helper_model or settings.helper_model} | db {settings.db_path}"
+    )
 
     # Run every gold query once up front; a broken gold query should fail loudly.
     gold_rows = {
-        q["id"]: [execute_query(settings.db_path, sql, max_rows=10_000).rows
-                  for sql in gold_variants(q)]
+        q["id"]: [
+            execute_query(settings.db_path, sql, max_rows=10_000).rows for sql in gold_variants(q)
+        ]
         for q in questions
     }
     embedder = load_embedder(settings)
@@ -187,9 +195,11 @@ def main() -> int:
         summaries.append(summarize(model, records))
 
     table = markdown_table(summaries, settings.top_n_tables)
-    note = (f"\n\nProvider: `{settings.llm_provider}`, helper model: "
-            f"`{args.helper_model or settings.helper_model}`, {len(questions)} questions, "
-            f"run on {time.strftime('%Y-%m-%d')}.\n")
+    note = (
+        f"\n\nProvider: `{settings.llm_provider}`, helper model: "
+        f"`{args.helper_model or settings.helper_model}`, {len(questions)} questions, "
+        f"run on {time.strftime('%Y-%m-%d')}.\n"
+    )
     (args.out / "summary.md").write_text(table + note, encoding="utf-8")
     (args.out / "summary.json").write_text(json.dumps(summaries, indent=2), encoding="utf-8")
     print("\n" + table + note)

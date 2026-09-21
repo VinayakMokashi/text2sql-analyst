@@ -23,9 +23,7 @@ class FakeLLM(LLM):
         self._replies = replies if replies is not None else ["SELECT 1"]
         self.calls: list[tuple[str, str]] = []
 
-    def _complete(
-        self, system: str, user: str, temperature: float, max_tokens: int
-    ) -> LLMResponse:
+    def _complete(self, system: str, user: str, temperature: float, max_tokens: int) -> LLMResponse:
         self.calls.append((system, user))
         if callable(self._replies):
             text = self._replies(system, user)

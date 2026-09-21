@@ -1,8 +1,8 @@
 """Command-line interface.
 
-    python -m text2sql index              # build the table index (once per database)
-    python -m text2sql ask "question"     # answer a question
-    python -m text2sql tables             # show indexed tables and their descriptions
+python -m text2sql index              # build the table index (once per database)
+python -m text2sql ask "question"     # answer a question
+python -m text2sql tables             # show indexed tables and their descriptions
 """
 
 from __future__ import annotations
@@ -95,8 +95,10 @@ def render(out: PipelineResult, show_sql: bool = True, max_rows: int = 15) -> No
         console.print(table)
         more = res.row_count - max_rows
         if more > 0 or res.truncated:
-            console.print(f"[dim]... {res.row_count} rows shown in total"
-                          f"{' (truncated at the row limit)' if res.truncated else ''}[/]")
+            console.print(
+                f"[dim]... {res.row_count} rows shown in total"
+                f"{' (truncated at the row limit)' if res.truncated else ''}[/]"
+            )
 
     if show_sql and out.sql:
         console.print(Syntax(out.sql, "sql", word_wrap=True, theme="ansi_dark"))

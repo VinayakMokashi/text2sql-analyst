@@ -32,9 +32,7 @@ class OpenAICompatibleLLM(LLM):
             base_url=base_url, api_key=api_key, timeout=timeout_s, max_retries=max_retries
         )
 
-    def _complete(
-        self, system: str, user: str, temperature: float, max_tokens: int
-    ) -> LLMResponse:
+    def _complete(self, system: str, user: str, temperature: float, max_tokens: int) -> LLMResponse:
         start = time.perf_counter()
         try:
             resp = self._client.chat.completions.create(

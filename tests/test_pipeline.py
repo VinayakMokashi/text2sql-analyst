@@ -26,8 +26,9 @@ def helper_replies(selection_json: str):
     def reply(system: str, _user: str) -> str:
         if "which tables are needed" in system:
             return selection_json
-        return '{"answer": "Brazil leads with 375.0.", "insights": ["Two countries"], ' \
-               '"caveats": []}'
+        return (
+            '{"answer": "Brazil leads with 375.0.", "insights": ["Two countries"], "caveats": []}'
+        )
 
     return reply
 
@@ -38,8 +39,11 @@ def make_pipeline(shop_db, tmp_path, embedder):
     index_dir = tmp_path / "index"
     build_index(tables, index_dir, embedder, llm=None)
 
-    def factory(sql_replies, selection='{"tables": ["customers", "products"], '
-                '"answerable": true}', max_retries=2):
+    def factory(
+        sql_replies,
+        selection='{"tables": ["customers", "products"], "answerable": true}',
+        max_retries=2,
+    ):
         settings = Settings(db_path=shop_db, max_retries=max_retries, llm_provider="fake")
         helper = FakeLLM(helper_replies(selection))
         sql_llm = FakeLLM(sql_replies)

@@ -55,14 +55,10 @@ def validate_sql(sql: str | None, dialect: str = "sqlite") -> str:
         raise UnsafeSQLError(f"The SQL could not be parsed: {first_line}") from exc
 
     if len(statements) != 1:
-        raise UnsafeSQLError(
-            f"Exactly one statement is allowed, but {len(statements)} were found."
-        )
+        raise UnsafeSQLError(f"Exactly one statement is allowed, but {len(statements)} were found.")
     root = statements[0]
     if not isinstance(root, ALLOWED_ROOTS):
-        raise UnsafeSQLError(
-            f"Only SELECT queries are allowed (got {root.key.upper()})."
-        )
+        raise UnsafeSQLError(f"Only SELECT queries are allowed (got {root.key.upper()}).")
 
     for item in root.walk():
         node = item[0] if isinstance(item, tuple) else item  # older sqlglot yields tuples

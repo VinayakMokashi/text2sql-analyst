@@ -127,8 +127,10 @@ def render_details(out: PipelineResult) -> None:
         cand = ", ".join(f"{c.name} ({c.score:.2f})" for c in out.candidates)
         st.markdown(f"- Vector search candidates: {cand}")
         if out.selection is not None:
-            st.markdown(f"- LLM selected: {', '.join(out.selection.tables) or 'none'}"
-                        + (f" - _{out.selection.reason}_" if out.selection.reason else ""))
+            st.markdown(
+                f"- LLM selected: {', '.join(out.selection.tables) or 'none'}"
+                + (f" - _{out.selection.reason}_" if out.selection.reason else "")
+            )
         extra = [t for t in out.tables_used if out.selection and t not in out.selection.tables]
         if extra:
             st.markdown(f"- Added to connect joins: {', '.join(extra)}")
@@ -161,15 +163,19 @@ with st.sidebar:
         st.session_state.history = []
 
 st.title("Ask your data")
-st.caption(f"Connected to **{settings.db_path.name}**. Answers come from the data, not from "
-           "the model's memory; open *SQL and how it was produced* to check the work.")
+st.caption(
+    f"Connected to **{settings.db_path.name}**. Answers come from the data, not from "
+    "the model's memory; open *SQL and how it was produced* to check the work."
+)
 
 try:
     pipeline = get_pipeline()
 except Exception as exc:  # noqa: BLE001 - show setup problems in the UI, not a traceback
     st.error(f"**Setup problem:** {exc}")
-    st.info("See the README's *Setup* section: download the database, add your API key to "
-            "`.env`, and run `python -m text2sql index`.")
+    st.info(
+        "See the README's *Setup* section: download the database, add your API key to "
+        "`.env`, and run `python -m text2sql index`."
+    )
     st.stop()
 
 history: list[PipelineResult] = st.session_state.setdefault("history", [])

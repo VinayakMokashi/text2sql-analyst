@@ -67,7 +67,9 @@ def test_cannot_answer_is_detected():
 
 
 def test_generator_and_repair_call_the_llm(tables):
-    llm = FakeLLM(["```sql\nSELECT nme FROM customers\n```", "```sql\nSELECT name FROM customers\n```"])
+    llm = FakeLLM(
+        ["```sql\nSELECT nme FROM customers\n```", "```sql\nSELECT name FROM customers\n```"]
+    )
     gen = SQLGenerator(llm)
     first = gen.generate("names?", tables)
     fixed = gen.repair("names?", tables, first.sql, "no such column: nme")

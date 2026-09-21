@@ -79,8 +79,7 @@ def test_unsafe_sql_never_reaches_the_database(shop_db):
 
 def test_long_running_query_times_out(shop_db):
     endless = (
-        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) "
-        "SELECT COUNT(*) FROM c"
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT COUNT(*) FROM c"
     )
     with pytest.raises(QueryTimeoutError, match="longer than"):
         execute_query(shop_db, endless, timeout_s=0.2)
