@@ -36,6 +36,15 @@ def get_pipeline() -> Pipeline:
     return Pipeline.from_settings(get_settings())
 
 
+def md(text: str) -> str:
+    """Escape model-written text for st.markdown.
+
+    Streamlit renders $...$ as LaTeX, so "between $449 and $481" would turn into a
+    maths formula. Dollar signs are escaped so amounts display as written.
+    """
+    return text.replace("$", r"\$")
+
+
 def theme() -> str:
     try:
         return st.context.theme.type or "light"
@@ -48,7 +57,7 @@ def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
     if spec.kind == "metric":
         value = df[spec.y].iloc[0]
         text = f"{value:,.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else f"{value:,}"
-        st.metric(label=spec.y.replace("_", " ").capitalize(), value=text)
+        st.metric(label=spec.y.replace("_", " "), value=text)
         return
 
     color = SERIES_COLOR[theme()]
@@ -60,11 +69,13 @@ def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
             alt.Chart(df)
             .mark_bar(color=color, cornerRadiusEnd=4, height={"band": 0.7})
             .encode(
-                x=alt.X(spec.y, type="quantitative", title=spec.y),
+                x=alt.X(spec.y, type="quantitative", title=spec.y, axis=alt.Axis(tickCount=5)),
                 y=alt.Y(spec.x, type="nominal", sort="-x", title=None),
                 tooltip=tooltip,
             )
-            .properties(height=max(120, 28 * len(df)))
+            # The height includes the axes (Streamlit fits the chart to it), so give
+            # each bar ~32px plus room for the x-axis and its title.
+            .properties(height=70 + 32 * len(df))
         )
     else:  # line
         data = df.sort_values(spec.x)
@@ -73,7 +84,9 @@ def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
             .mark_line(color=color, strokeWidth=2, point=alt.OverlayMarkDef(size=64, color=color))
             .encode(
                 x=alt.X(spec.x, type="ordinal", title=None, axis=alt.Axis(labelAngle=0)),
-                y=alt.Y(spec.y, type="quantitative", title=spec.y),
+                # Unlike bars, a line needs no zero baseline; starting the axis near the
+                # data keeps small changes over time visible.
+                y=alt.Y(spec.y, type="quantitative", title=spec.y, scale=alt.Scale(zero=False)),
                 tooltip=tooltip,
             )
             .properties(height=280)
@@ -84,21 +97,21 @@ def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
 # ------------------------------------------------------------------------- results
 def render_result(out: PipelineResult) -> None:
     if out.status == "unanswerable":
-        st.warning(f"**I can't answer that from this database.** {out.message}")
+        st.warning(f"**I can't answer that from this database.** {md(out.message)}")
         render_details(out)
         return
     if out.status == "error":
-        st.error(out.message)
+        st.error(md(out.message))
         render_details(out)
         return
 
     a = out.analysis
     if a is not None:
-        st.markdown(f"#### {a.answer}")
+        st.markdown(f"#### {md(a.answer)}")
         if a.insights:
-            st.markdown("\n".join(f"- {i}" for i in a.insights))
+            st.markdown("\n".join(f"- {md(i)}" for i in a.insights))
         if a.caveats:
-            st.caption("Caveats: " + " ".join(a.caveats))
+            st.caption("Caveats: " + md(" ".join(a.caveats)))
 
     res = out.result
     df = res.to_dataframe()
@@ -129,7 +142,7 @@ def render_details(out: PipelineResult) -> None:
         if out.selection is not None:
             st.markdown(
                 f"- LLM selected: {', '.join(out.selection.tables) or 'none'}"
-                + (f" - _{out.selection.reason}_" if out.selection.reason else "")
+                + (f" - _{md(out.selection.reason)}_" if out.selection.reason else "")
             )
         extra = [t for t in out.tables_used if out.selection and t not in out.selection.tables]
         if extra:
