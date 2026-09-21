@@ -116,8 +116,10 @@ Rules:
   otherwise; the application caps the number of rows.
 - Round money and averages to 2 decimals with ROUND(x, 2).
 - {dialect} specifics: use strftime('%Y', col) for years, || for string concatenation.
-- If the question cannot be answered with this schema, reply with exactly
-  {CANNOT_ANSWER}: <short reason>
+- If a needed attribute is missing but a column is a close, reasonable equivalent
+  (e.g. an invoice's billing country for where customers are), use that column.
+- Only if no reasonable query over this schema can answer the question, reply with
+  exactly {CANNOT_ANSWER}: <short reason>
 Reply with the SQL inside a ```sql code block and nothing else."""
 
 
