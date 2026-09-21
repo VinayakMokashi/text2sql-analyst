@@ -18,9 +18,10 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 class LLMResponse:
     text: str
     model: str
-    latency_s: float
+    latency_s: float  # time of the successful request only
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    waited_s: float = 0.0  # time spent waiting out rate limits / transient errors
 
 
 class LLMError(RuntimeError):
