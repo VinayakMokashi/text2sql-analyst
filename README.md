@@ -1,5 +1,9 @@
 # Text2SQL Analyst
 
+[![CI](https://github.com/VinayakMokashi/text2sql-analyst/actions/workflows/ci.yml/badge.svg)](https://github.com/VinayakMokashi/text2sql-analyst/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Ask a database questions in plain English and get answers, not just queries.**
 
 Text2SQL Analyst finds the tables relevant to your question, writes SQL, runs it
