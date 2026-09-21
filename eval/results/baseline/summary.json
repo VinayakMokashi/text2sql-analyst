@@ -1,0 +1,38 @@
+[
+  {
+    "model": "openai/gpt-oss-120b",
+    "questions": 47,
+    "ex": 95.3,
+    "ex_by_difficulty": {
+      "easy": 100.0,
+      "medium": 100.0,
+      "hard": 85.7
+    },
+    "declined_correctly": "4/4",
+    "false_refusals": 2,
+    "recall_at_n": 99.2,
+    "schema_recall": 97.7,
+    "avg_latency_s": 0.89,
+    "median_latency_s": 0.81,
+    "self_corrected": 0,
+    "llm_errors": 0
+  },
+  {
+    "model": "openai/gpt-oss-20b",
+    "questions": 47,
+    "ex": 93.0,
+    "ex_by_difficulty": {
+      "easy": 100.0,
+      "medium": 100.0,
+      "hard": 78.6
+    },
+    "declined_correctly": "4/4",
+    "false_refusals": 2,
+    "recall_at_n": 99.2,
+    "schema_recall": 97.7,
+    "avg_latency_s": 3.84,
+    "median_latency_s": 3.46,
+    "self_corrected": 0,
+    "llm_errors": 0
+  }
+]

@@ -22,9 +22,6 @@ models/
 *.gguf
 *.onnx
 
-# Eval scratch output (the committed summary lives in eval/results/)
-eval/results/*.jsonl
-
 # Editors / OS
 .vscode/
 .idea/
