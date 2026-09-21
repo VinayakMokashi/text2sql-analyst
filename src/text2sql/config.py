@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/chinook.db")
     index_dir: Path = Path("data/index")
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    model_cache_dir: Path = Path("data/models")
+    sql_dialect: str = "sqlite"
 
     # --- Pipeline knobs -----------------------------------------------------------------
     top_n_tables: int = Field(6, ge=1, description="Candidates returned by vector search.")
