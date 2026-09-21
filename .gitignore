@@ -1,0 +1,32 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Downloaded databases, vector store, model caches
+data/
+*.db
+*.sqlite
+*.sqlite3
+.fastembed_cache/
+models/
+*.gguf
+*.onnx
+
+# Eval scratch output (the committed summary lives in eval/results/)
+eval/results/*.jsonl
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
