@@ -6,14 +6,16 @@ For each SQL model it reports:
     declined
   * retrieval recall: share of gold tables in the vector-search candidates (@N) and
     in the final schema given to the SQL model (after selection + join expansion)
-  * average latency per question and how often self-correction was needed
+  * average SQL-stage latency (generation + execution + repairs) and how often
+    self-correction was needed
 
-The helper model (table selection) stays fixed across runs, so differences come from
-the SQL model alone. The analysis step is skipped because it does not affect EX.
+Table selection (helper model) runs once per question and its result is shared by all
+SQL models, so every model sees exactly the same schema and differences come from SQL
+generation alone. The analysis step is skipped because it does not affect EX.
 
 Usage:
     python eval/run_eval.py                                   # model from .env
-    python eval/run_eval.py --models llama-3.3-70b-versatile qwen/qwen3-32b
+    python eval/run_eval.py --models openai/gpt-oss-120b qwen/qwen3.8-27b
     python eval/run_eval.py --limit 5 --sleep 0               # quick smoke test
 """
 
@@ -32,7 +34,10 @@ from typing import Any
 from text2sql.config import get_settings
 from text2sql.evaluation import recall, results_match, tables_in_sql
 from text2sql.execution import execute_query
+from text2sql.generation import SQLGenerator
+from text2sql.llm import create_llm
 from text2sql.pipeline import Pipeline, load_embedder
+from text2sql.retrieval import TableSelection, TableSelector
 
 EVAL_DIR = Path(__file__).parent
 DIFFICULTIES = ["easy", "medium", "hard"]
@@ -54,13 +59,24 @@ def slug(model: str) -> str:
     return re.sub(r"[^a-zA-Z0-9.-]+", "_", model)
 
 
+class CachedSelector:
+    """Memoises table selection per question so all SQL models get the same tables."""
+
+    def __init__(self, inner: TableSelector) -> None:
+        self._inner = inner
+        self._cache: dict[str, TableSelection] = {}
+
+    def select(self, question: str, *args: Any, **kwargs: Any) -> TableSelection:
+        if question not in self._cache:
+            self._cache[question] = self._inner.select(question, *args, **kwargs)
+        return self._cache[question]
+
+
 def evaluate_model(
-    model: str, questions: list[dict[str, Any]], gold_rows: dict[str, list], args, embedder
+    pipe: Pipeline, model: str, questions: list[dict[str, Any]], gold_rows: dict[str, list], args
 ) -> list[dict[str, Any]]:
-    settings = get_settings()
-    pipe = Pipeline.from_settings(
-        settings, sql_model=model, helper_model=args.helper_model, embedder=embedder
-    )
+    s = pipe.settings
+    pipe.generator = SQLGenerator(create_llm(s, "sql", model), s.sql_dialect, s.sample_rows)
     records = []
     for n, item in enumerate(questions, 1):
         out = pipe.ask(item["question"], analyze=False)
@@ -89,6 +105,13 @@ def evaluate_model(
             "repaired": len(out.attempts) > 1 and out.ok,
             "llm_error": out.message.startswith("The language model request failed"),
             "latency_s": round(out.total_s, 3),
+            # Model time for every SQL attempt plus query execution. Excludes time spent
+            # waiting out free-tier rate limits, which says nothing about the model.
+            "sql_latency_s": round(
+                sum(a.latency_s for a in out.attempts)
+                + (out.result.elapsed_s if out.result else 0.0),
+                3,
+            ),
             "candidates": [c.name for c in out.candidates],
             "tables_used": out.tables_used,
             "recall_at_n": recall(gold_tables, [c.name for c in out.candidates]),
@@ -115,7 +138,8 @@ def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
     by_diff: dict[str, list] = defaultdict(list)
     for r in answerable:
         by_diff[r["difficulty"]].append(r)
-    latencies = [r["latency_s"] for r in records if not r["llm_error"]]
+    # Only questions that reached SQL generation (declined ones stop earlier).
+    latencies = [r["sql_latency_s"] for r in records if r["attempts"] and not r["llm_error"]]
     return {
         "model": model,
         "questions": len(records),
@@ -139,7 +163,7 @@ def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
 def markdown_table(summaries: list[dict[str, Any]], top_n: int) -> str:
     header = (
         "| SQL model | EX (all) | Easy | Medium | Hard | Declined unanswerable | "
-        f"False refusals | Table recall@{top_n} | Final schema recall | Avg latency | "
+        f"False refusals | Table recall@{top_n} | Final schema recall | Avg SQL latency | "
         "Self-corrected |\n|---|---|---|---|---|---|---|---|---|---|---|"
     )
 
@@ -183,13 +207,16 @@ def main() -> int:
         ]
         for q in questions
     }
-    embedder = load_embedder(settings)
+    pipe = Pipeline.from_settings(
+        settings, helper_model=args.helper_model, embedder=load_embedder(settings)
+    )
+    pipe.selector = CachedSelector(pipe.selector)  # type: ignore[assignment]
     args.out.mkdir(parents=True, exist_ok=True)
 
     summaries = []
     for model in args.models:
         print(f"\n=== {model} ===")
-        records = evaluate_model(model, questions, gold_rows, args, embedder)
+        records = evaluate_model(pipe, model, questions, gold_rows, args)
         with (args.out / f"{slug(model)}.jsonl").open("w", encoding="utf-8") as fh:
             fh.writelines(json.dumps(r) + "\n" for r in records)
         summaries.append(summarize(model, records))
