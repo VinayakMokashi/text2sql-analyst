@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import re
 import sqlite3
+import zlib
 from pathlib import Path
 
 import pytest
@@ -38,6 +41,35 @@ INSERT INTO products VALUES (1, 'Guitar', 'Music', 300.0), (2, 'Drum', 'Music', 
 INSERT INTO orders VALUES (1, 1, '2024-01-05'), (2, 2, '2024-02-10'), (3, 1, '2025-03-01');
 INSERT INTO order_items VALUES (1, 1, 1), (1, 3, 2), (2, 2, 1), (3, 3, 4);
 """
+
+
+class HashEmbedder:
+    """Bag-of-words hashing embedder: deterministic, instant, no model download.
+
+    Good enough for tests because questions that share words with a table's
+    document land closest to it.
+    """
+
+    dim = 256
+
+    def _vec(self, text: str) -> list[float]:
+        vec = [0.0] * self.dim
+        for word in re.findall(r"[a-z]+", text.lower()):
+            word = word.rstrip("s")  # crude singularisation: customers ~ customer
+            vec[zlib.crc32(word.encode()) % self.dim] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    def embed_documents(self, texts):
+        return [self._vec(t) for t in texts]
+
+    def embed_query(self, text):
+        return self._vec(text)
+
+
+@pytest.fixture()
+def embedder() -> HashEmbedder:
+    return HashEmbedder()
 
 
 @pytest.fixture()
