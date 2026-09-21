@@ -77,6 +77,18 @@ def test_selector_parses_json_and_fixes_casing(shop_tables):
     assert sel.answerable and not sel.fallback
 
 
+def test_selector_can_pick_a_table_that_was_not_retrieved(shop_tables):
+    # order_items ranked below the cut-off, but it is listed by name so it can be chosen.
+    llm = FakeLLM(['{"tables": ["products", "order_items"], "answerable": true}'])
+    sel = TableSelector(llm).select(
+        "units sold per product", _candidates("products"), schema_by_name(shop_tables), 3
+    )
+    assert sel.tables == ["products", "order_items"]
+    prompt = llm.calls[0][1]
+    assert "Other tables in the database" in prompt
+    assert "customers, order_items, orders" in prompt
+
+
 def test_selector_reports_unanswerable(shop_tables):
     llm = FakeLLM(['{"tables": [], "answerable": false, "reason": "No weather data."}'])
     sel = TableSelector(llm).select(

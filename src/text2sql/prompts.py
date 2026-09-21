@@ -44,7 +44,10 @@ Sample rows:
 
 # -------------------------------------------------------------------------- retrieval
 def table_selection_prompt(
-    question: str, candidates: Sequence[Candidate], max_tables: int
+    question: str,
+    candidates: Sequence[Candidate],
+    max_tables: int,
+    other_tables: Sequence[str] = (),
 ) -> tuple[str, str]:
     system = (
         "You are a database expert. You decide which tables are needed to answer a "
@@ -54,14 +57,23 @@ def table_selection_prompt(
         f"Table: {c.name}\nColumns: {', '.join(c.columns)}\nDescription: {c.description}"
         for c in candidates
     )
+    # Vector search can rank a needed table just below the cut-off. Listing the rest
+    # of the schema by name lets the model still pick it, and stops it from declaring
+    # a question unanswerable only because the right table was not shown in detail.
+    others = (
+        "\n\nOther tables in the database (names only; you may choose these too):\n"
+        + ", ".join(other_tables)
+        if other_tables
+        else ""
+    )
     user = f"""Question: {question}
 
 Candidate tables:
-{listing}
+{listing}{others}
 
 Pick the smallest set of tables (at most {max_tables}) whose columns are needed to write
 the SQL, including tables needed only to join others together.
-If the question cannot be answered from these tables at all (for example it asks about
+If the question cannot be answered from this database at all (for example it asks about
 data that is not stored here, or it is not a data question), set "answerable" to false.
 
 Reply with JSON only, in exactly this shape:

@@ -15,6 +15,10 @@ from text2sql.prompts import Candidate, table_selection_prompt
 from text2sql.retrieval.retriever import RetrievedTable
 from text2sql.utils import parse_json_object
 
+# Upper bound on the names-only list of non-candidate tables, so very large schemas
+# cannot blow up the prompt; the candidates are always shown in full.
+MAX_OTHER_TABLES = 200
+
 
 @dataclass
 class TableSelection:
@@ -40,7 +44,11 @@ class TableSelector:
             for c in candidates
             if c.name.lower() in schemas
         ]
-        system, user = table_selection_prompt(question, offered, max_tables)
+        offered_lower = {c.name.lower() for c in offered}
+        others = sorted(s.name for key, s in schemas.items() if key not in offered_lower)
+        system, user = table_selection_prompt(
+            question, offered, max_tables, others[:MAX_OTHER_TABLES]
+        )
         reply = self._llm.complete(system, user, max_tokens=1000).text
         data = parse_json_object(reply)
 
@@ -58,8 +66,9 @@ class TableSelector:
         if data.get("answerable") is False:
             return TableSelection([], answerable=False, reason=reason)
 
-        # Keep only real candidate names, restoring their original casing.
-        by_lower = {c.name.lower(): c.name for c in offered}
+        # Keep only real table names (candidates or the names-only list), restoring
+        # their original casing; anything else is a hallucination and is dropped.
+        by_lower = {key: s.name for key, s in schemas.items()}
         raw = data.get("tables") or []
         chosen: list[str] = []
         for name in raw if isinstance(raw, list) else []:
