@@ -190,7 +190,10 @@ Summary statistics computed by the application (exact, prefer these for totals):
 
 Reply with JSON only, in exactly this shape:
 {{"answer": "1-2 sentences that directly answer the question with the key numbers",
-  "insights": ["up to 3 short observations: comparisons, concentration, outliers, trends"],
-  "caveats": ["0-2 short notes on limitations, e.g. ties, truncated results, data range"]}}
-Do not invent numbers. If the result is empty, say that no matching data was found."""
+  "insights": ["0-3 short observations: comparisons, concentration, outliers, trends"],
+  "caveats": ["0-2 short notes on real limitations, e.g. ties, truncated results"]}}
+Rules: do not invent numbers. Every insight must add information that is not already
+in the answer; a single value usually has no insights, so return an empty list rather
+than restating it. Skip generic caveats that apply to any query. If the result is
+empty, say that no matching data was found."""
     return system, user
