@@ -78,4 +78,9 @@ class TableSelector:
 
         if not chosen:
             return top_k_fallback("Selection named no known tables; using top matches.")
+        if len(chosen) > max_tables:
+            # The cap keeps the SQL prompt focused, but trimming can drop a table the
+            # query needs, so make it visible rather than silent.
+            dropped = ", ".join(chosen[max_tables:])
+            reason = f"{reason} (Trimmed to {max_tables} tables; dropped: {dropped}.)".strip()
         return TableSelection(chosen[:max_tables], answerable=True, reason=reason)

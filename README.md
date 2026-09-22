@@ -143,7 +143,7 @@ flowchart TB
    retrieved. This step favors recall.
 2. **LLM table selection** ([`retrieval/selector.py`](src/text2sql/retrieval/selector.py)).
    A fast model reads the candidates' descriptions and columns and keeps only the
-   tables it needs (at most K, default 4). This step favors precision. The model also
+   tables it needs (at most K, default 6). This step favors precision. The model also
    sees the *names* of all other tables, so it can still pick a table that vector search
    ranked just below the cut-off. It can also decide that the question **cannot be
    answered** from this data ("What is the weather tomorrow?"), and the pipeline then

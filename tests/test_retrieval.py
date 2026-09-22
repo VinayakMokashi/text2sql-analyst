@@ -89,6 +89,15 @@ def test_selector_can_pick_a_table_that_was_not_retrieved(shop_tables):
     assert "customers, order_items, orders" in prompt
 
 
+def test_selector_says_when_it_trims_the_selection(shop_tables):
+    llm = FakeLLM(['{"tables": ["orders", "customers", "products"], "answerable": true}'])
+    sel = TableSelector(llm).select(
+        "q", _candidates("orders", "customers", "products"), schema_by_name(shop_tables), 2
+    )
+    assert sel.tables == ["orders", "customers"]
+    assert "dropped: products" in sel.reason
+
+
 def test_selector_reports_unanswerable(shop_tables):
     llm = FakeLLM(['{"tables": [], "answerable": false, "reason": "No weather data."}'])
     sel = TableSelector(llm).select(

@@ -49,7 +49,9 @@ class Settings(BaseSettings):
 
     # --- Pipeline knobs -----------------------------------------------------------------
     top_n_tables: int = Field(6, ge=1, description="Candidates returned by vector search.")
-    top_k_tables: int = Field(4, ge=1, description="Tables kept after LLM selection.")
+    # 6, not 4: multi-hop questions on richer schemas (e.g. Sakila's payment -> rental ->
+    # inventory -> film_category -> category) need five tables.
+    top_k_tables: int = Field(6, ge=1, description="Tables kept after LLM selection.")
     sample_rows: int = Field(3, ge=0, description="Sample rows shown per table in prompts.")
     max_rows: int = Field(200, ge=1, description="Maximum rows returned by a query.")
     query_timeout_s: float = Field(10.0, gt=0)
