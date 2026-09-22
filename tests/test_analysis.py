@@ -95,3 +95,47 @@ def test_analyst_falls_back_to_plain_text_and_flags_truncation():
     llm = FakeLLM(['{"answer": "Rock.", "caveats": []}'])
     analysis = Analyst(llm).analyze("q", make_result(GENRES.columns, GENRES.rows, True))
     assert analysis.caveats == ["Only the first 3 rows were returned."]
+
+
+# ---------------------------------------------------------------- review fixes
+def test_names_ending_in_id_letters_are_not_ids():
+    df = pd.DataFrame({"customer": ["a", "b"], "total_paid": [5.0, 7.5], "CustomerId": [1, 2]})
+    assert measure_columns(df) == ["total_paid"]
+
+
+def test_integer_months_and_nullable_years_are_time_not_measures():
+    df = pd.DataFrame({"month": [1, 2, 3], "revenue": [10.0, 12.0, 9.0]})
+    assert measure_columns(df) == ["revenue"]
+    assert suggest_chart(df).kind == "line"
+    years = pd.DataFrame({"year": [2009.0, None, 2011.0], "n": [1, 2, 3]})
+    assert measure_columns(years) == ["n"]
+
+
+def test_no_share_of_total_with_negative_values():
+    df = pd.DataFrame({"region": ["North", "South", "East"], "profit": [120, -100, -15]})
+    stats = summary_stats(df)
+    assert "% of total" not in stats
+    assert "max at region=North" in stats
+
+
+def test_no_trend_line_when_periods_repeat():
+    df = pd.DataFrame(
+        {
+            "year": [2009, 2009, 2010, 2010],
+            "genre": ["A", "B", "A", "B"],
+            "sales": [10.0, 90.0, 60.0, 20.0],
+        }
+    )
+    assert "overall change" not in summary_stats(df)
+
+
+def test_trend_percentage_uses_the_size_of_the_start_value():
+    df = pd.DataFrame({"year": [2020, 2021], "profit": [-200.0, -100.0]})
+    assert "overall change +100.00, +50.0%" in summary_stats(df)
+
+
+def test_truncation_caveat_always_comes_first():
+    llm = FakeLLM(['{"answer": "Rock.", "caveats": ["a", "b", "c row"]}'])
+    analysis = Analyst(llm).analyze("q", make_result(GENRES.columns, GENRES.rows, True))
+    assert analysis.caveats[0] == "Only the first 3 rows were returned."
+    assert len(analysis.caveats) == 3

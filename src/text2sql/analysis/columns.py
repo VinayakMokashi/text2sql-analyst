@@ -10,24 +10,45 @@ import re
 
 import pandas as pd
 
-_TIME_NAME_RE = re.compile(r"(date|year|month|day|week|quarter|period|time)", re.IGNORECASE)
+# Name words that mark a time column, matched as whole words: "invoice_year" and
+# "InvoiceMonth" count, "days_rented" and "valid_until" do not.
+_TIME_WORDS = {"date", "year", "month", "quarter", "week", "day", "hour", "period", "time"}
+# For whole numbers (2009, 7, 3) only unit names count: "time_spent" is a measure.
+_NUMERIC_TIME_WORDS = {"year", "month", "quarter", "week", "day", "hour"}
 _DATE_VALUE_RE = re.compile(r"^\d{4}(-\d{2}){0,2}([ T].*)?$")  # 2024, 2024-01, 2024-01-31
 
 
+def _name_words(name: str) -> set[str]:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(name))  # InvoiceYear -> Invoice Year
+    return set(re.findall(r"[a-z]+", spaced.lower()))
+
+
 def is_id_column(name: str) -> bool:
-    """Surrogate keys are numbers, but summing or charting them is meaningless."""
-    lowered = str(name).lower()
-    return lowered == "id" or lowered.endswith("id")
+    """Surrogate keys are numbers, but summing or charting them is meaningless.
+
+    Matches ``id``, ``customer_id`` and ``CustomerId``, but not ``total_paid`` or
+    ``valid``, which merely end in the letters "id".
+    """
+    text = str(name)
+    return text.lower() == "id" or text.lower().endswith("_id") or text.endswith(("Id", "ID"))
 
 
 def is_time_column(df: pd.DataFrame, col: str) -> bool:
-    """Datetime dtype, or a time-sounding name whose values all look like dates/years."""
-    if pd.api.types.is_datetime64_any_dtype(df[col]):
+    """A datetime column, or a time-named column whose values look like dates or periods."""
+    series = df[col]
+    if pd.api.types.is_datetime64_any_dtype(series):
         return True
-    if not _TIME_NAME_RE.search(str(col)):
+    words = _name_words(col)
+    if not words & _TIME_WORDS:
         return False
-    values = df[col].dropna().astype(str)
-    return not values.empty and bool(values.map(lambda v: bool(_DATE_VALUE_RE.match(v))).all())
+    values = series.dropna()
+    if values.empty:
+        return False
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        # 2009, 7 or 2009.0 (a year column with a NULL becomes float): a period number.
+        whole = bool((values == values.round()).all())
+        return whole and bool(words & _NUMERIC_TIME_WORDS)
+    return bool(values.astype(str).map(lambda v: bool(_DATE_VALUE_RE.match(v))).all())
 
 
 def measure_columns(df: pd.DataFrame) -> list[str]:

@@ -50,13 +50,19 @@ def summary_stats(df: pd.DataFrame) -> str:
         if label_col is not None and len(df) > 1:
             top = df.loc[series.idxmax(), label_col]
             bottom = df.loc[series.idxmin(), label_col]
-            share = series.max() / series.sum() * 100 if series.sum() else 0
-            line += f"; max at {label_col}={top} ({share:.1f}% of total); min at {bottom}"
+            line += f"; max at {label_col}={top}"
+            # A share of the total only means something when every part is positive:
+            # with profits of 120, -100 and -15, the top one would be "2400% of total".
+            if (series >= 0).all() and series.sum() > 0:
+                line += f" ({series.max() / series.sum() * 100:.1f}% of total)"
+            line += f"; min at {bottom}"
         lines.append(line)
 
     # For time series, state the overall direction explicitly: comparing the first and
     # last periods is exactly the kind of arithmetic models get wrong on their own.
-    time_cols = [c for c in labels if is_time_column(df, c)]
+    # Only when each period appears once: with one row per (year, genre), the first and
+    # last rows are unrelated.
+    time_cols = [c for c in labels if is_time_column(df, c) and df[c].is_unique]
     if time_cols and len(df) > 1:
         tcol = time_cols[0]
         ordered = df.sort_values(tcol)
@@ -68,7 +74,8 @@ def summary_stats(df: pd.DataFrame) -> str:
             t0, t1 = valid[tcol].iloc[0], valid[tcol].iloc[-1]
             v0, v1 = valid[col].iloc[0], valid[col].iloc[-1]
             change = v1 - v0
-            pct = f", {change / v0 * 100:+.1f}%" if v0 else ""
+            # abs(): going from -200 to -100 is an improvement, i.e. +50%, not -50%.
+            pct = f", {change / abs(v0) * 100:+.1f}%" if v0 else ""
             lines.append(
                 f"{col} from {tcol}={t0} to {tcol}={t1}: {_fmt(v0)} -> {_fmt(v1)} "
                 f"(overall change {change:+,.2f}{pct})"
@@ -76,9 +83,18 @@ def summary_stats(df: pd.DataFrame) -> str:
     return "\n".join(lines) if lines else "(no numeric columns)"
 
 
-def result_table_text(df: pd.DataFrame, max_rows: int) -> str:
-    """Compact CSV of the first ``max_rows`` rows (CSV costs the fewest tokens)."""
-    shown = df.head(max_rows).to_csv(index=False).strip()
+def result_table_text(df: pd.DataFrame, max_rows: int, max_chars: int = 120) -> str:
+    """Compact CSV of the first ``max_rows`` rows (CSV costs the fewest tokens).
+
+    Long text values are shortened so one wide column cannot blow up the prompt.
+    """
+
+    def short(value: object) -> object:
+        if isinstance(value, str) and len(value) > max_chars:
+            return value[: max_chars - 3] + "..."
+        return value
+
+    shown = df.head(max_rows).map(short).to_csv(index=False).strip()
     if len(df) > max_rows:
         shown += f"\n... ({len(df) - max_rows} more rows not shown)"
     return shown
@@ -107,21 +123,22 @@ class Analyst:
             summary_stats(df),
         )
         resp = self._llm.complete(system, user, temperature=0.2, max_tokens=1200)
+        # Added by the application, and always first, so it can never be crowded out.
+        truncation = (
+            [f"Only the first {result.row_count} rows were returned."] if result.truncated else []
+        )
         data = parse_json_object(resp.text)
         if data is None or not str(data.get("answer", "")).strip():
             # Still useful: show whatever the model wrote rather than nothing.
-            return Analysis(answer=resp.text.strip(), latency_s=resp.latency_s)
+            return Analysis(answer=resp.text.strip(), caveats=truncation, latency_s=resp.latency_s)
 
         def as_list(value: object) -> list[str]:
             items = value if isinstance(value, list) else [value] if value else []
             return [str(v).strip() for v in items if str(v).strip()]
 
-        caveats = as_list(data.get("caveats"))
-        if result.truncated and not any("row" in c.lower() for c in caveats):
-            caveats.append(f"Only the first {result.row_count} rows were returned.")
         return Analysis(
             answer=str(data["answer"]).strip(),
             insights=as_list(data.get("insights"))[:3],
-            caveats=caveats[:3],
+            caveats=(truncation + as_list(data.get("caveats")))[:3],
             latency_s=resp.latency_s,
         )
