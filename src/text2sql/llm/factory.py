@@ -40,8 +40,11 @@ PRESETS: dict[str, ProviderPreset] = {
 
 
 def _resolve_api_key(settings: Settings, preset: ProviderPreset | None) -> str:
-    if settings.llm_api_key is not None:
-        return settings.llm_api_key.get_secret_value()
+    # A blank T2S_LLM_API_KEY= line (easy to leave behind in .env) must not hide the
+    # provider's own key variable.
+    explicit = settings.llm_api_key.get_secret_value().strip() if settings.llm_api_key else ""
+    if explicit:
+        return explicit
     if preset is None or preset.key_env is None:
         return "not-needed"  # the OpenAI SDK insists on some value
     key = os.environ.get(preset.key_env, "").strip()

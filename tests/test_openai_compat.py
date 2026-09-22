@@ -83,3 +83,70 @@ def test_retry_delay_falls_back_to_backoff():
     assert retry_delay(rate_limit_error("2.5"), attempt=0) == 2.5
     assert retry_delay(rate_limit_error(None), attempt=3) == 8.0
     assert retry_delay(rate_limit_error("soon"), attempt=0) == 1.0
+
+
+def llm_with_transport(handler, **kwargs):
+    client = OpenAICompatibleLLM("test", "m", "http://test/v1", "key", **kwargs)
+    client._client = openai.OpenAI(
+        base_url="http://test/v1",
+        api_key="key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    return client
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, json={"error": {"message": "upstream failed"}}),
+        httpx.Response(200, text="<html>a web page</html>", headers={"content-type": "text/html"}),
+        httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "m",
+                "choices": [],
+            },
+        ),
+    ],
+)
+def test_odd_http_200_responses_become_llm_errors(response):
+    llm = llm_with_transport(lambda _request: response)
+    with pytest.raises(LLMError, match="unexpected response"):
+        llm.complete("s", "u")
+
+
+def test_reply_cut_off_before_any_answer_is_reported():
+    body = {
+        "id": "x",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "m",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": None},
+            }
+        ],
+    }
+    llm = llm_with_transport(lambda _request: httpx.Response(200, json=body))
+    with pytest.raises(LLMError, match="token limit"):
+        llm.complete("s", "u")
+
+
+def test_unreachable_server_gives_up_after_a_few_tries(monkeypatch):
+    calls = []
+
+    def refuse(request):
+        calls.append(1)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    llm = llm_with_transport(refuse, max_retries=8)
+    with pytest.raises(LLMError, match="server is running"):
+        llm.complete("s", "u")
+    assert len(calls) == 3  # first try + 2 retries, not 9

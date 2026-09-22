@@ -1,7 +1,8 @@
 """Application settings, loaded from environment variables and a local ``.env`` file.
 
 Everything that a user might want to change without touching code (provider, models,
-paths, limits) lives here, so the rest of the code base never reads ``os.environ``.
+paths, limits) lives here. The one exception is the provider's own API-key variable
+(``GROQ_API_KEY`` and friends), which the LLM factory reads by name.
 """
 
 from __future__ import annotations
@@ -23,7 +24,12 @@ class Settings(BaseSettings):
     """All runtime configuration. Every field can be set as ``T2S_<FIELD_NAME>``."""
 
     model_config = SettingsConfigDict(
-        env_prefix="T2S_", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="T2S_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # A blank line such as "T2S_SQL_MODEL=" means "use the default", not "".
+        env_ignore_empty=True,
     )
 
     # --- LLM -----------------------------------------------------------------------

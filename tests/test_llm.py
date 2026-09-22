@@ -46,3 +46,28 @@ def test_ollama_needs_no_key():
 def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="Unknown LLM provider"):
         create_llm(Settings(llm_provider="nope"))
+
+
+# ---------------------------------------------------------------- review fixes
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        (
+            "<think>draft ```sql\nSELECT 1\n```</think>```sql\nSELECT 2\n```",
+            "```sql\nSELECT 2\n```",
+        ),
+        # starts inside the reasoning block: only the closing tag is present
+        ("draft ```sql\nSELECT Name FROM Genre\n```\n</think>\nSELECT real", "SELECT real"),
+        # cut off while still reasoning: the block never closes
+        ("<think>\nOkay, let me look at the schema", ""),
+    ],
+)
+def test_unpaired_reasoning_tags_are_removed(reply, expected):
+    assert FakeLLM([reply]).complete("s", "u").text == expected
+
+
+def test_blank_api_key_setting_does_not_hide_the_provider_key(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "real-key")
+    monkeypatch.setenv("T2S_LLM_API_KEY", "")
+    llm = create_llm(Settings(llm_provider="groq"))
+    assert llm._client.api_key == "real-key"

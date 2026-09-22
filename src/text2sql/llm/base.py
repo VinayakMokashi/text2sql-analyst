@@ -12,6 +12,21 @@ from dataclasses import dataclass
 
 # Reasoning models (Qwen3, DeepSeek-R1, ...) may prepend their chain of thought.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+
+
+def strip_reasoning(text: str) -> str:
+    """Remove a model's visible chain of thought, keeping only the final answer.
+
+    Besides complete ``<think>...</think>`` blocks this handles two unpaired cases,
+    because a draft query inside the reasoning must never be mistaken for the answer:
+    a reply that starts inside the block (only ``</think>`` appears), and a reply cut
+    off while still reasoning (``<think>`` is never closed).
+    """
+    text = _THINK_RE.sub("", text)
+    text = _THINK_CLOSE_RE.split(text)[-1]
+    return _THINK_OPEN_RE.split(text)[0].strip()
 
 
 @dataclass
@@ -50,7 +65,7 @@ class LLM(ABC):
         thinking before they write the answer.
         """
         response = self._complete(system, user, temperature, max_tokens)
-        response.text = _THINK_RE.sub("", response.text).strip()
+        response.text = strip_reasoning(response.text)
         return response
 
     def __repr__(self) -> str:

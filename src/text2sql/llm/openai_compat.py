@@ -11,12 +11,16 @@ import time
 from typing import Any
 
 import openai
+from openai.types.chat import ChatCompletion
 
 from text2sql.llm.base import LLM, LLMError, LLMResponse
 
 # Transient failures worth waiting for; anything else (bad key, unknown model, bad
 # request) fails immediately.
 RETRYABLE = (openai.RateLimitError, openai.APIConnectionError, openai.InternalServerError)
+# A rate limit clears with time, so it gets many tries. A connection error or timeout
+# usually means the server is down or the URL is wrong, so it gets few.
+CONNECTION_RETRIES = 2
 
 
 def retry_delay(exc: Exception, attempt: int) -> float:
@@ -66,8 +70,11 @@ class OpenAICompatibleLLM(LLM):
         extra: dict[str, Any] = (
             {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
         )
+        name = f"{self.provider}/{self.model}"
+        first_try = time.monotonic()
         waited = 0.0
-        for attempt in range(self._max_retries + 1):
+        attempt = 0
+        while True:
             start = time.perf_counter()
             try:
                 resp = self._client.chat.completions.create(
@@ -82,23 +89,43 @@ class OpenAICompatibleLLM(LLM):
                 )
                 break
             except RETRYABLE as exc:
+                if isinstance(exc, openai.RateLimitError):
+                    limit = self._max_retries
+                    hint = "If this is a daily free-tier limit, try again later or switch model."
+                else:
+                    limit = min(CONNECTION_RETRIES, self._max_retries)
+                    hint = "Check that the server is running and the base URL is correct."
                 delay = retry_delay(exc, attempt)
-                if attempt == self._max_retries or waited + delay > self._max_wait_s:
+                elapsed = time.monotonic() - first_try
+                # The budget counts time spent in failed requests too, not just sleeps.
+                if attempt >= limit or elapsed + delay > self._max_wait_s:
                     raise LLMError(
-                        f"{self.provider}/{self.model}: still failing after {attempt + 1} "
-                        f"attempt(s) and {waited:.0f}s of waiting ({exc}). If this is a daily "
-                        "free-tier limit, try again later or switch to another model."
+                        f"{name}: gave up after {attempt + 1} attempt(s) and {elapsed:.0f}s "
+                        f"({exc}). {hint}"
                     ) from exc
                 time.sleep(delay)
                 waited += delay
+                attempt += 1
             except openai.APIError as exc:  # auth, unknown model, bad request, ...
-                raise LLMError(f"{self.provider}/{self.model}: {exc}") from exc
+                raise LLMError(f"{name}: {exc}") from exc
 
+        # Some servers answer HTTP 200 with an error body or an HTML page (a wrong base
+        # URL pointing at a web UI); turn those into a readable LLMError, not a crash.
+        if not isinstance(resp, ChatCompletion) or not resp.choices:
+            detail = getattr(resp, "error", None) or str(resp)[:200]
+            raise LLMError(f"{name}: unexpected response from the server: {detail}")
+        choice = resp.choices[0]
+        text = (choice.message.content if choice.message else None) or ""
+        if not text.strip() and choice.finish_reason == "length":
+            raise LLMError(
+                f"{name}: the reply hit the {max_tokens}-token limit before any answer "
+                "(a reasoning model spent it thinking). Try a lower reasoning effort."
+            )
         usage = resp.usage
         return LLMResponse(
             # Reasoning models return their chain of thought in a separate field on
             # most providers, so ``content`` holds only the final answer.
-            text=resp.choices[0].message.content or "",
+            text=text,
             model=self.model,
             latency_s=time.perf_counter() - start,  # the successful call only
             prompt_tokens=usage.prompt_tokens if usage else None,
