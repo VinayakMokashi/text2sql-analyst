@@ -280,6 +280,16 @@ def build_summary(out_dir: Path, question_ids: set[str], top_n: int) -> tuple[st
     return markdown_table(summaries, top_n) + note, summaries
 
 
+def default_out(questions: Path) -> Path:
+    """results/ for the dev set, results/<set name>/ for any other question set.
+
+    So a run on another set never lands on the dev set's published logs:
+    heldout.jsonl -> results/heldout, sakila_questions.jsonl -> results/sakila.
+    """
+    name = questions.stem.removesuffix("_questions")
+    return DEFAULT_OUT if name == "questions" else DEFAULT_OUT / name
+
+
 def main() -> int:
     settings = get_settings()
     parser = argparse.ArgumentParser(description="Evaluate SQL models on the question set.")
@@ -289,7 +299,9 @@ def main() -> int:
     parser.add_argument("--ids", nargs="*", help="only these question ids")
     parser.add_argument("--limit", type=int, help="only the first N questions")
     parser.add_argument("--sleep", type=float, default=1.0, help="pause between questions (s)")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--out", type=Path, help="default: results/ for the dev set, else results/<set name>/"
+    )
     parser.add_argument(
         "--reuse-selection",
         type=Path,
@@ -298,12 +310,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    args.out = args.out or default_out(args.questions)
     questions = load_questions(args.questions, args.ids, args.limit)
     if not questions:
         parser.error("no questions match --ids/--limit")
-    if (args.ids or args.limit) and args.out == DEFAULT_OUT:
-        # A partial run must never overwrite the full, published logs.
-        args.out = DEFAULT_OUT / "partial"
+    if args.ids or args.limit:
+        # A partial run must never overwrite the full, published logs, whatever --out is.
+        args.out = args.out / "partial"
         print(f"Partial run: writing to {args.out}")
     print(
         f"{len(questions)} questions | provider {settings.llm_provider} | helper model "

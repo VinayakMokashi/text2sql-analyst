@@ -68,3 +68,10 @@ def test_replay_skips_selections_that_never_completed(tmp_path):
 def test_latency_cell(value, expected):
     summary = run_eval.summarize("m", [record("a")]) | {"avg_latency_s": value}
     assert f"| {expected} |" in run_eval.markdown_table([summary], 6)
+
+
+def test_other_question_sets_never_write_over_the_dev_set_logs():
+    results = run_eval.DEFAULT_OUT
+    assert run_eval.default_out(Path("eval/questions.jsonl")) == results
+    assert run_eval.default_out(Path("eval/heldout.jsonl")) == results / "heldout"
+    assert run_eval.default_out(Path("eval/sakila_questions.jsonl")) == results / "sakila"
