@@ -7,17 +7,42 @@ paths, limits) lives here. The one exception is the provider's own API-key varia
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Populate os.environ from .env as well, so provider-specific key variables such as
-# GROQ_API_KEY are visible to the LLM factory even though they have no T2S_ prefix.
-# The search starts in the working directory, like the relative paths below.
-load_dotenv(find_dotenv(usecwd=True), override=False)
+# What load_env_file() copied into os.environ, so a later call can update those values
+# without ever overriding a variable that was set outside .env.
+_from_env_file: dict[str, str] = {}
+
+
+def load_env_file() -> None:
+    """Copy ``.env`` into ``os.environ``; variables set outside the file always win.
+
+    Provider key variables such as GROQ_API_KEY have no T2S_ prefix, so the LLM factory
+    reads them from os.environ. ``get_settings`` calls this each time it rebuilds the
+    settings, so an edited file (a new key, another model) takes effect on reload.
+    The search starts in the working directory, like the relative paths below.
+    """
+    path = find_dotenv(usecwd=True)
+    values = {k: v for k, v in (dotenv_values(path) if path else {}).items() if v is not None}
+    for key, value in list(_from_env_file.items()):
+        if key not in values and os.environ.get(key) == value:
+            del os.environ[key]  # the line was removed from .env
+            del _from_env_file[key]
+    for key, value in values.items():
+        current = os.environ.get(key)
+        if current is not None and _from_env_file.get(key) != current:
+            continue  # set by the shell or the host (say, Streamlit secrets)
+        os.environ[key] = value
+        _from_env_file[key] = value
+
+
+load_env_file()
 
 
 class Settings(BaseSettings):
@@ -76,5 +101,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide settings (cached so .env is parsed only once)."""
+    """Return the process-wide settings. ``get_settings.cache_clear()`` re-reads ``.env``."""
+    load_env_file()
     return Settings()
