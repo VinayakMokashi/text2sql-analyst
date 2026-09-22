@@ -98,6 +98,20 @@ def test_used_up_quota_is_flagged_so_the_app_can_word_it(make_pipeline):
     assert out.rate_limited
 
 
+def test_quota_error_in_the_analysis_is_not_shown_as_is(make_pipeline):
+    pipe, _ = make_pipeline(["SELECT COUNT(*) AS n FROM orders"])
+
+    def quota_gone(*_args, **_kwargs):
+        raise LLMError("429 in organization org_SECRET on tokens per day", rate_limited=True)
+
+    pipe.analyst.analyze = quota_gone
+    out = pipe.ask("How many orders?")
+    assert out.ok  # the rows are still worth showing
+    caveat = " ".join(out.analysis.caveats)
+    assert "org_SECRET" not in caveat
+    assert "quota" in caveat
+
+
 def test_empty_question(make_pipeline):
     pipe, _ = make_pipeline(["SELECT 1"])
     assert pipe.ask("   ").status == "error"

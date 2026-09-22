@@ -278,10 +278,17 @@ class Pipeline:
                 try:
                     out.analysis = self.analyst.analyze(question, out.result)
                 except LLMError as exc:
-                    # The data is still worth showing even if the explanation failed.
+                    # The data is still worth showing even if the explanation failed. A
+                    # quota error is not passed on as is: it names the provider account.
+                    log.warning("Analysis failed: %s", exc)
+                    reason = (
+                        "the model's rate limit or daily quota was reached. Try again later."
+                        if exc.rate_limited
+                        else str(exc)
+                    )
                     out.analysis = Analysis(
                         answer=f"Here are the results ({out.result.row_count} rows).",
-                        caveats=[f"The written analysis is unavailable: {exc}"],
+                        caveats=[f"The written analysis is unavailable: {reason}"],
                     )
 
     @staticmethod

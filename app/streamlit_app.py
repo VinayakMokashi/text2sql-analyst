@@ -22,7 +22,7 @@ import streamlit as st
 
 from text2sql.analysis import ChartSpec
 from text2sql.config import get_settings
-from text2sql.demo import DailyBudget, ensure_sample_ready
+from text2sql.demo import ensure_sample_ready, shared_budget
 from text2sql.indexing import FastEmbedEmbedder
 from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
 
@@ -72,12 +72,6 @@ def get_pipeline(db_path: str) -> Pipeline:
     embedder = get_embedder(settings.embedding_model)
     ensure_sample_ready(settings, DESCRIPTIONS_DIR, lambda: embedder)
     return Pipeline.from_settings(settings, embedder=embedder)
-
-
-@st.cache_resource(show_spinner=False)
-def get_budget(limit: int | None) -> DailyBudget:
-    """One budget per server process, shared by every visitor."""
-    return DailyBudget(limit)
 
 
 def md(text: str) -> str:
@@ -265,19 +259,15 @@ with st.sidebar:
         if st.session_state.get("active_db") != choice:
             st.session_state.history = []  # another database starts a new conversation
             st.session_state.active_db = choice
-        db_path = settings.db_path.with_name(f"{choice}.db")
+        if choice != settings.db_path.stem.lower():  # the configured file keeps its name
+            db_path = settings.db_path.with_name(f"{choice}.db")
     examples = EXAMPLES.get(db_path.stem.lower(), []) if db_path else []
     if examples:
         st.subheader("Try an example")
     for example in examples:
         if st.button(example, width="stretch"):
             st.session_state.pending = example
-    if settings and settings.demo_daily_limit is not None:
-        left = get_budget(settings.demo_daily_limit).remaining()
-        st.caption(
-            f"Free demo: {left} of {settings.demo_daily_limit} questions left today, shared "
-            f"by all visitors. [Run your own copy]({REPO_URL}) for unlimited use."
-        )
+    budget_slot = st.empty()  # filled in at the end, once this run's question counts
     if settings:
         st.subheader("Configuration")
         st.markdown(
@@ -305,6 +295,7 @@ try:
         raise setup_error
     pipeline = get_pipeline(str(db_path))
 except Exception as exc:  # noqa: BLE001 - show setup problems in the UI, not a traceback
+    st.session_state.pop("pending", None)  # an example clicked now is not asked later
     st.error(f"**Setup problem:** {md(str(exc))}")
     st.info(
         "See the README's *Setup* section: add your API key to `.env`, and for your own "
@@ -324,7 +315,10 @@ def within_limits() -> bool:
             f"[Run your own copy]({REPO_URL}) to keep going."
         )
         return False
-    if not get_budget(settings.demo_daily_limit).take():
+    if settings.demo_daily_limit == 0:
+        st.info(f"The free demo is paused. You can [run your own copy]({REPO_URL}).")
+        return False
+    if not shared_budget(settings.demo_daily_limit).take():
         st.info(
             "The free demo has used up today's questions; the budget resets at midnight "
             f"UTC. You can also [run your own copy]({REPO_URL})."
@@ -334,6 +328,12 @@ def within_limits() -> bool:
     return True
 
 
+def give_back() -> None:
+    """Return a question that the provider's quota stopped: the visitor got no answer."""
+    shared_budget(settings.demo_daily_limit).refund()
+    st.session_state.asked = max(0, st.session_state.get("asked", 0) - 1)
+
+
 history: list[PipelineResult] = st.session_state.setdefault("history", [])
 for past in history:
     with st.chat_message("user"):
@@ -341,16 +341,33 @@ for past in history:
     with st.chat_message("assistant"):
         render_result(past)
 
-question = st.chat_input('Ask a question, or a follow-up like "and for 2012?"')
-question = question or st.session_state.pop("pending", None)
+typed = st.chat_input('Ask a question, or a follow-up like "and for 2012?"')
+typed = typed.strip() if typed else ""  # a blank message is not a question
+example = st.session_state.pop("pending", None)
+question = typed or example
 if question:
     with st.chat_message("user"):
         st.markdown(md(question))
     with st.chat_message("assistant"):
         if within_limits():
             with st.spinner("Finding tables, writing SQL, analysing..."):
-                # Earlier answers give follow-up questions their context.
+                # Earlier answers give follow-up questions their context. An example from
+                # the sidebar is complete as it is, so it skips the rewrite (and its call).
                 context = [past.as_turn() for past in history if past.status != "error"]
-                result = pipeline.ask(question, history=context)
+                result = pipeline.ask(question, history=context if typed else [])
+                # Keep the answer before drawing anything. If the visitor typed or clicked
+                # while it was computed, Streamlit reruns the script at the next st.* call,
+                # and a question already paid for would be lost.
+                history.append(result)
+                if result.rate_limited:
+                    give_back()
             render_result(result)
-            history.append(result)
+
+if settings.demo_daily_limit == 0:
+    budget_slot.caption(f"The free demo is paused. [Run your own copy]({REPO_URL}).")
+elif settings.demo_daily_limit is not None:
+    left = shared_budget(settings.demo_daily_limit).remaining()
+    budget_slot.caption(
+        f"Free demo: {left} of {settings.demo_daily_limit} questions left today, shared by "
+        f"all visitors. [Run your own copy]({REPO_URL}) for unlimited use."
+    )
