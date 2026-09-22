@@ -104,7 +104,8 @@ flowchart TB
 
     subgraph ON["Answering a question"]
         direction TB
-        Q[/"Question"/] --> RET["1. Vector search<br/>top-N candidate tables"]
+        Q[/"Question"/] --> FU["0. Follow-up? Rewrite it<br/>as a standalone question"]
+        FU --> RET["1. Vector search<br/>top-N candidate tables"]
         RET --> SEL["2. LLM table selection<br/>top-K tables, or 'cannot answer'"]
         SEL --> JOIN["3. Add bridge tables<br/>from the foreign-key graph"]
         JOIN --> GEN["4. LLM writes SQL<br/>schema + sample rows + join hints"]
@@ -138,6 +139,13 @@ flowchart TB
 
 ### Online: answering a question
 
+0. **Follow-ups become standalone questions**
+   ([`conversation.py`](src/text2sql/conversation.py)). In a conversation, "and in
+   2012?" only makes sense next to the previous question. The helper model rewrites it,
+   using the last three questions and their SQL, into "How many invoices were issued in
+   2012?", and every later step works on that. The app shows the rewrite as
+   *Interpreted as: ...*, so a wrong reading is easy to spot. The first question of a
+   conversation skips this step.
 1. **Vector search** ([`retrieval/retriever.py`](src/text2sql/retrieval/retriever.py)).
    The question is embedded and the top-N (default 6) most similar tables are
    retrieved. This step favors recall.
@@ -259,7 +267,9 @@ without `make`, run the commands shown in it.
 streamlit run app/streamlit_app.py
 ```
 
-Type a question or click an example in the sidebar. Each answer shows:
+Type a question or click an example in the sidebar. Follow-up questions work: ask "How
+many invoices were issued in 2010?", then "and in 2012?", then "Which country had the
+most of them?". Each answer shows:
 
 1. **The answer** in one or two sentences, with the key numbers
 2. **Analysis**: up to three observations (comparisons, concentration, trends) and caveats
@@ -274,6 +284,7 @@ Type a question or click an example in the sidebar. Each answer shows:
 ```bash
 python -m text2sql ask "Who are the top 5 customers by total spending?"
 python -m text2sql ask "How did revenue change year over year?" --no-sql
+python -m text2sql chat              # a conversation: follow-up questions work
 python -m text2sql tables            # list tables and their generated descriptions
 python -m text2sql models            # list the models your provider/key can use today
 python -m text2sql index --refresh   # regenerate the table descriptions
@@ -575,7 +586,8 @@ text2sql-analyst/
 │   ├── config.py            # all settings, read from .env (T2S_* variables)
 │   ├── prompts.py           # every prompt in one place
 │   ├── pipeline.py          # Pipeline.ask(): the stages wired together
-│   ├── cli.py               # python -m text2sql {index,ask,tables,models}
+│   ├── conversation.py      # follow-up questions -> standalone questions
+│   ├── cli.py               # python -m text2sql {index,ask,chat,tables,models}
 │   ├── evaluation.py        # execution-accuracy matching, table recall
 │   ├── llm/                 # provider interface: OpenAI-compatible client, fake LLM, factory
 │   ├── db/                  # read-only connection, schema introspection
@@ -619,8 +631,10 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   SQLite-specific.
 - **No value linking.** If a user misspells a value ("ACDC" for "AC/DC"), the model
   has only the sample rows to go on. It does not search actual column values.
-- **One question at a time.** There is no conversation memory, so follow-ups like "and
-  for 2012?" are not resolved.
+- **Follow-ups rely on a rewrite.** Each follow-up is rewritten into a standalone
+  question from the last three turns. Long threads that refer back further, or very
+  ambiguous references ("the other one"), can be misread; the app shows the rewrite so
+  you can rephrase.
 - **The analysis can still be wrong.** It is grounded in the rows and in exact
   statistics, but it is generated text. The SQL and table are shown so you can verify.
 - **Small, self-written eval sets.** 87 questions across three sets are enough to
@@ -635,7 +649,6 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
 - Retrieve **few-shot examples** (similar question → SQL pairs) into the prompt
 - **Value retrieval**: index distinct column values to fix misspelled filters
 - **Self-consistency**: generate several queries and keep the answer most of them agree on
-- **Conversation memory** for follow-up questions
 - PostgreSQL / DuckDB executors
 - Evaluate on a public benchmark subset (Spider 2.0-lite, BIRD mini-dev)
 - Caching of repeated questions and a query history view
