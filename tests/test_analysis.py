@@ -28,6 +28,20 @@ def test_summary_stats_are_exact_and_labelled():
     assert "min at Metal" in stats
 
 
+def test_summary_stats_give_the_gap_and_the_top_three_share():
+    # Sakila's category revenue: a model once wrote the 1,896.49 gap as "896.49".
+    df = pd.DataFrame(
+        {
+            "category": ["Sports", "Sci-Fi", "Animation", "Drama", "Music"],
+            "revenue": [5314.21, 4756.98, 4656.30, 4587.39, 3417.72],
+        }
+    )
+    stats = summary_stats(df)
+    assert "max minus min 1,896.49" in stats
+    assert "top 3 together 64.8% of total" in stats
+    assert "top 3 together" not in summary_stats(GENRES.to_dataframe())  # 3 rows: all of it
+
+
 def test_summary_stats_state_first_to_last_change_for_time_series():
     df = pd.DataFrame(
         {"year": [2011, 2009, 2010], "sales": [450.58, 449.46, 481.45]}  # unsorted on purpose

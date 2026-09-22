@@ -53,9 +53,16 @@ def summary_stats(df: pd.DataFrame) -> str:
             line += f"; max at {label_col}={top}"
             # A share of the total only means something when every part is positive:
             # with profits of 120, -100 and -15, the top one would be "2400% of total".
-            if (series >= 0).all() and series.sum() > 0:
+            positive = bool((series >= 0).all()) and series.sum() > 0
+            if positive:
                 line += f" ({series.max() / series.sum() * 100:.1f}% of total)"
             line += f"; min at {bottom}"
+            # Differences and group shares are arithmetic the model would otherwise do
+            # itself, and it does get them wrong (a gap of 1,896.49 written as 896.49).
+            line += f"; max minus min {_fmt(series.max() - series.min())}"
+            if positive and len(series) >= 4 and not is_time_column(df, label_col):
+                top3 = series.nlargest(3).sum() / series.sum() * 100
+                line += f"; top 3 together {top3:.1f}% of total"
         lines.append(line)
 
     # For time series, state the overall direction explicitly: comparing the first and

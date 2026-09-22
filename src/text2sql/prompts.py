@@ -201,7 +201,8 @@ SQL that was run:
 Result: {row_count} row(s){shown_note}.
 {table_text}
 
-Summary statistics computed by the application (exact, prefer these for totals):
+Summary statistics computed by the application (exact; quote these rather than computing
+totals, shares or differences yourself):
 {stats_text}
 
 Reply with JSON only, in exactly this shape:
