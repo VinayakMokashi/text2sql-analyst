@@ -39,6 +39,14 @@ def test_unusable_reply_keeps_the_original_question():
     assert FollowUpRewriter(llm).rewrite(HISTORY, "and in 2012?") == "and in 2012?"
 
 
+def test_a_reply_that_is_not_one_question_keeps_the_original():
+    for reply in ['{"standalone": ["In 2012?", "In 2013?"]}', '{"standalone": 2012}']:
+        llm = FakeLLM([reply])
+        assert FollowUpRewriter(llm).rewrite(HISTORY, "and in 2012 and 2013?") == (
+            "and in 2012 and 2013?"
+        )
+
+
 def test_pipeline_answers_the_standalone_question(make_pipeline):
     pipe, sql_llm = make_pipeline(["SELECT COUNT(*) AS n FROM orders"])
     pipe.rewriter = FollowUpRewriter(FakeLLM(['{"standalone": "How many orders in 2025?"}']))

@@ -40,8 +40,11 @@ class FollowUpRewriter:
         recent = [(t.question, _short(t.sql, 600), _short(t.answer, 300)) for t in history]
         system, user = followup_rewrite_prompt(recent[-MAX_TURNS:], question)
         data = parse_json_object(self._llm.complete(system, user, max_tokens=600).text)
-        standalone = str((data or {}).get("standalone") or "").strip()
-        return standalone or question  # an unusable reply keeps the original question
+        value = (data or {}).get("standalone")
+        # Only a string will do: a list of two questions, say, must not become the text
+        # "['...', '...']". An unusable reply keeps the original question.
+        standalone = value.strip() if isinstance(value, str) else ""
+        return standalone or question
 
 
 def _short(text: str | None, limit: int) -> str | None:
