@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     max_retries: int = Field(2, ge=0, description="SQL self-correction retries.")
     analysis_rows: int = Field(40, ge=1, description="Result rows shown to the analysis LLM.")
 
+    # --- Public demo (unset = unlimited) -------------------------------------------------
+    demo_daily_limit: int | None = Field(None, ge=0, description="Questions per day, all users.")
+    demo_session_limit: int | None = Field(None, ge=0, description="Questions per visitor.")
+
     @property
     def db_index_dir(self) -> Path:
         """Per-database index folder, so several databases can be indexed side by side."""
