@@ -82,3 +82,21 @@ def test_cli_chat_passes_earlier_turns_to_follow_ups(monkeypatch):
     assert cli.main(["chat", "--provider", "fake"]) == 0
     assert [len(h) for h in stub.histories] == [0, 1]
     assert stub.histories[1][0].question == "first question"
+
+
+def test_ctrl_c_during_a_chat_question_cancels_only_that_question(monkeypatch):
+    stub = _StubPipeline()
+    asked = []
+
+    def ask(question, history=()):
+        asked.append(question)
+        if question == "slow question":
+            raise KeyboardInterrupt
+        return PipelineResult(question, status="unanswerable", message="No such data.")
+
+    stub.ask = ask
+    monkeypatch.setattr(cli.Pipeline, "from_settings", classmethod(lambda cls, s: stub))
+    replies = iter(["slow question", "next question", "exit"])
+    monkeypatch.setattr(cli.console, "input", lambda _prompt: next(replies))
+    assert cli.main(["chat", "--provider", "fake"]) == 0
+    assert asked == ["slow question", "next question"]

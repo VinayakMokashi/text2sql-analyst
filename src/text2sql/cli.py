@@ -69,7 +69,9 @@ def cmd_index(args: argparse.Namespace) -> int:
         db_path=s.db_path,
         force=args.force,
     )  # fmt: skip
-    console.print(f"[green]Done.[/] {len(indexed)} tables indexed into {s.db_index_dir}")
+    console.print(
+        f"[green]Done.[/] {len(indexed)} tables indexed into {escape(str(s.db_index_dir))}"
+    )
     return 0
 
 
@@ -165,8 +167,12 @@ def cmd_chat(args: argparse.Namespace) -> int:
             break
         if question.lower() in {"", "exit", "quit"}:
             break
-        with console.status("Thinking..."):
-            out = pipeline.ask(question, history=history)
+        try:
+            with console.status("Thinking..."):
+                out = pipeline.ask(question, history=history)
+        except KeyboardInterrupt:  # Ctrl+C stops this question, not the conversation
+            console.print("[dim]Cancelled.[/]")
+            continue
         if out.interpreted_as:
             console.print(f"[dim]Interpreted as: {escape(out.interpreted_as)}[/]")
         render(out, show_sql=not args.no_sql)
@@ -182,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--db", type=Path, help="SQLite file (default: T2S_DB_PATH)")
     common.add_argument("--provider", help="LLM provider (default: T2S_LLM_PROVIDER)")
     common.add_argument("--sql-model", help="model for SQL generation")
-    common.add_argument("--helper-model", help="model for selection/analysis/descriptions")
+    common.add_argument("--helper-model", help="model for selection, follow-ups, analysis, descriptions")
 
     sub = parser.add_subparsers(dest="command", required=True)
     p_index = sub.add_parser("index", parents=[common], help="build the table index")
