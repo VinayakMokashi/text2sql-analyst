@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -35,7 +36,9 @@ def fetch(url: str, dest: Path) -> Path:
 
 
 def build_chinook(out: Path, tmp: Path) -> None:
-    fetch(CHINOOK_URL, tmp / "chinook.sqlite").replace(out)  # already a SQLite file
+    # Already a SQLite file. shutil.move, not Path.replace: the temp folder may be on
+    # another drive or filesystem, where a rename fails.
+    shutil.move(fetch(CHINOOK_URL, tmp / "chinook.sqlite"), out)
 
 
 def build_sakila(out: Path, tmp: Path) -> None:
@@ -53,7 +56,7 @@ def build_sakila(out: Path, tmp: Path) -> None:
         # film_text is an always-empty full-text-search helper in this port. Left in, it
         # invites the model to query a table that can never return rows.
         conn.executescript("DROP TABLE IF EXISTS film_text; VACUUM;")
-    part.replace(out)
+    shutil.move(part, out)
 
 
 BUILDERS = {"chinook": build_chinook, "sakila": build_sakila}
