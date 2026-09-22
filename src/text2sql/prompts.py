@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from text2sql.db.schema import TableSchema
+from text2sql.db.schema import TableSchema, quote_ident
 
 CANNOT_ANSWER = "CANNOT_ANSWER"
 
@@ -94,15 +94,31 @@ def _schema_block(tables: Sequence[TableSchema], sample_rows: int) -> str:
 
 
 def _join_hints(tables: Sequence[TableSchema]) -> str:
-    """Spell out the foreign keys among the chosen tables; this prevents wrong joins."""
+    """Spell out the foreign keys among the chosen tables; this prevents wrong joins.
+
+    A composite key becomes one condition joined with AND, so the model sees that the
+    columns belong together.
+    """
     names = {t.name.lower() for t in tables}
     hints = [
-        f'"{t.name}"."{fk.column}" = "{fk.ref_table}"."{fk.ref_column}"'
+        " AND ".join(
+            f"{quote_ident(t.name)}.{quote_ident(col)} = "
+            f"{quote_ident(fk.ref_table)}.{quote_ident(ref)}"
+            for col, ref in zip(fk.columns, fk.ref_columns, strict=False)
+        )
         for t in tables
         for fk in t.foreign_keys
-        if fk.ref_table.lower() in names
+        if fk.ref_table.lower() in names and fk.ref_columns
     ]
     return "\n".join(hints) if hints else "(none)"
+
+
+def _dialect_tips(dialect: str) -> str:
+    if dialect.lower() == "sqlite":
+        return (
+            f"{dialect} specifics: use strftime('%Y', col) for years, || for string concatenation."
+        )
+    return f"Use {dialect} functions and syntax for dates and strings."
 
 
 def sql_system_prompt(dialect: str = "sqlite") -> str:
@@ -115,7 +131,7 @@ Rules:
 - Use ORDER BY + LIMIT for "top N" / "most" / "least" questions. Do not add a LIMIT
   otherwise; the application caps the number of rows.
 - Round money and averages to 2 decimals with ROUND(x, 2).
-- {dialect} specifics: use strftime('%Y', col) for years, || for string concatenation.
+- {_dialect_tips(dialect)}
 - If a needed attribute is missing but a column is a close, reasonable equivalent
   (e.g. an invoice's billing country for where customers are), use that column.
 - Only if no reasonable query over this schema can answer the question, reply with
