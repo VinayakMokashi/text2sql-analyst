@@ -9,11 +9,13 @@ python -m text2sql models             # list the models your provider/key can us
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -26,6 +28,9 @@ from text2sql.llm.openai_compat import OpenAICompatibleLLM
 from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
 
 console = Console()
+
+# Rich treats [square brackets] in printed strings as style markup, so every value
+# that comes from the data, a model or an exception goes through escape().
 
 
 def _settings(args: argparse.Namespace) -> Settings:
@@ -43,17 +48,24 @@ def _settings(args: argparse.Namespace) -> Settings:
 def cmd_index(args: argparse.Namespace) -> int:
     s = _settings(args)
     tables = read_schema(s.db_path, s.sample_rows)
-    llm = None if args.no_llm else create_llm(s, "helper")
+    # The fake provider answers every prompt with "SELECT 1"; caching that as a table
+    # description would poison later runs with a real model, so use templates instead.
+    use_llm = not args.no_llm and s.llm_provider.lower() != "fake"
+    llm = create_llm(s, "helper") if use_llm else None
+    source = "template text" if llm is None else llm.model
     console.print(
-        f"Indexing [bold]{len(tables)}[/] tables from {s.db_path} "
-        f"({'template descriptions' if llm is None else f'descriptions by {llm.model}'})"
+        f"Indexing [bold]{len(tables)}[/] tables from {escape(str(s.db_path))} "
+        f"(new descriptions by {escape(source)}; existing ones are reused"
+        f"{' unless --refresh' if not args.refresh else ''})"
     )
     with console.status("Loading embedding model..."):
         embedder = load_embedder(s)
     indexed = build_index(
         tables, s.db_index_dir, embedder, llm,
         refresh_descriptions=args.refresh,
-        on_progress=lambda msg: console.print(f"  {msg}"),
+        on_progress=lambda msg: console.print(f"  {escape(msg)}"),
+        db_path=s.db_path,
+        force=args.force,
     )  # fmt: skip
     console.print(f"[green]Done.[/] {len(indexed)} tables indexed into {s.db_index_dir}")
     return 0
@@ -64,7 +76,8 @@ def cmd_tables(args: argparse.Namespace) -> int:
     docs = load_descriptions(s.db_index_dir)
     table = Table("Table", "Rows", "Description", show_lines=True)
     for t in read_schema(s.db_path, sample_rows=0):
-        table.add_row(t.name, f"{t.row_count:,}", docs.get(t.name, "[dim](not indexed)[/]"))
+        description = escape(docs[t.name]) if t.name in docs else "[dim](not indexed)[/]"
+        table.add_row(escape(t.name), f"{t.row_count:,}", description)
     console.print(table)
     return 0
 
@@ -73,28 +86,31 @@ def cmd_models(args: argparse.Namespace) -> int:
     s = _settings(args)
     llm = create_llm(s, "helper")
     if not isinstance(llm, OpenAICompatibleLLM):
-        console.print(f"Provider '{s.llm_provider}' has no model list.")
+        console.print(f"Provider '{escape(s.llm_provider)}' has no model list.")
         return 0
-    console.print(f"Models served by [bold]{s.llm_provider}[/] for your key:")
+    console.print(f"Models served by [bold]{escape(s.llm_provider)}[/] for your key:")
     for model_id in llm.list_models():
-        role = {s.sql_model: " <- SQL model", s.helper_model: " <- helper model"}.get(model_id, "")
-        console.print(f"  {model_id}[green]{role}[/]")
+        roles = [r for r, m in (("SQL", s.sql_model), ("helper", s.helper_model)) if m == model_id]
+        marker = f" <- {' + '.join(roles)} model" if roles else ""
+        console.print(f"  {escape(model_id)}[green]{marker}[/]")
     return 0
 
 
 def render(out: PipelineResult, show_sql: bool = True, max_rows: int = 15) -> None:
     """Pretty-print a result: answer first, details after."""
     if out.status == "unanswerable":
-        console.print(Panel(out.message, title="Can't answer that from this data", style="yellow"))
+        title = "Can't answer that from this data"
+        console.print(Panel(escape(out.message), title=title, style="yellow"))
         return
     if out.status == "error":
-        console.print(Panel(out.message, title="Something went wrong", style="red"))
+        console.print(Panel(escape(out.message), title="Something went wrong", style="red"))
         if out.sql and show_sql:
             console.print(Syntax(out.sql, "sql", word_wrap=True))
         return
 
     a = out.analysis
     if a is not None:
+        # Markdown (not console markup) on purpose: the analysis is written in Markdown.
         body = a.answer
         if a.insights:
             body += "\n\n" + "\n".join(f"- {i}" for i in a.insights)
@@ -104,22 +120,20 @@ def render(out: PipelineResult, show_sql: bool = True, max_rows: int = 15) -> No
 
     res = out.result
     if res is not None and res.columns:
-        table = Table(*res.columns, header_style="bold")
+        table = Table(*(escape(c) for c in res.columns), header_style="bold")
         for row in res.rows[:max_rows]:
-            table.add_row(*("NULL" if v is None else str(v) for v in row))
+            table.add_row(*("NULL" if v is None else escape(str(v)) for v in row))
         console.print(table)
-        more = res.row_count - max_rows
-        if more > 0 or res.truncated:
-            console.print(
-                f"[dim]... {res.row_count} rows shown in total"
-                f"{' (truncated at the row limit)' if res.truncated else ''}[/]"
-            )
+        if res.row_count > max_rows or res.truncated:
+            limit_note = ", cut off at the row limit" if res.truncated else ""
+            shown = min(max_rows, res.row_count)
+            console.print(f"[dim]... showing {shown} of {res.row_count} rows{limit_note}[/]")
 
     if show_sql and out.sql:
         console.print(Syntax(out.sql, "sql", word_wrap=True, theme="ansi_dark"))
     fixes = len(out.attempts) - 1
     console.print(
-        f"[dim]tables: {', '.join(out.tables_used)} | "
+        f"[dim]tables: {escape(', '.join(out.tables_used))} | "
         f"{'self-corrected ' + str(fixes) + 'x | ' if fixes else ''}"
         f"{out.total_s:.1f}s[/]"
     )
@@ -145,8 +159,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
     p_index = sub.add_parser("index", parents=[common], help="build the table index")
-    p_index.add_argument("--refresh", action="store_true", help="regenerate descriptions")
-    p_index.add_argument("--no-llm", action="store_true", help="template descriptions only")
+    p_index.add_argument("--refresh", action="store_true", help="regenerate all descriptions")
+    p_index.add_argument(
+        "--no-llm", action="store_true", help="write template descriptions for new tables"
+    )
+    p_index.add_argument(
+        "--force",
+        action="store_true",
+        help="reuse an index folder built for another database file (e.g. after a move)",
+    )
     p_index.set_defaults(func=cmd_index)
 
     p_ask = sub.add_parser("ask", parents=[common], help="answer a question")
@@ -166,9 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (FileNotFoundError, ValueError, RuntimeError, LLMError) as exc:
-        # Configuration problems (missing DB, key or index) get one clear line.
-        console.print(f"[red]Error:[/] {exc}")
+    except (FileNotFoundError, ValueError, RuntimeError, LLMError, sqlite3.Error) as exc:
+        # Configuration problems (missing DB or key, not a SQLite file, stale index)
+        # get one clear line instead of a traceback.
+        console.print(f"[red]Error:[/] {escape(str(exc))}")
         return 2
 
 
