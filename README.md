@@ -1,10 +1,17 @@
 # Text2SQL Analyst
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://text2sql-analyst-88gmykwbxbueyfjt6db6px.streamlit.app/)
 [![CI](https://github.com/VinayakMokashi/text2sql-analyst/actions/workflows/ci.yml/badge.svg)](https://github.com/VinayakMokashi/text2sql-analyst/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Ask a database questions in plain English and get answers, not just queries.**
+
+**Try it live:** the [public demo](https://text2sql-analyst-88gmykwbxbueyfjt6db6px.streamlit.app/)
+needs no sign-up or API key. It answers questions about two sample databases, a music
+store (Chinook) and a DVD rental shop (Sakila). It runs on a free tier, so it allows a
+limited number of questions per day, and the first load takes a minute if the app has
+been asleep. To run it yourself, see [Setup](#setup).
 
 Text2SQL Analyst finds the tables relevant to your question, writes SQL, runs it
 safely (read-only), and replies with a short answer, a brief analysis and a chart when
@@ -60,7 +67,8 @@ Tables found by vector search: Genre, Track, InvoiceLine, Artist, Invoice, Album
 Tables kept by the LLM: Genre, Track, InvoiceLine. Total time: 1.8 s.
 </details>
 
-Trends get a line chart, and the answer states the overall change exactly:
+Trends get a line chart, and the answer quotes the exact overall change, which the app
+computes itself:
 
 ![Year-over-year trend](docs/images/answer-trend.png)
 
@@ -99,7 +107,7 @@ flowchart TB
         direction LR
         DB[(SQLite database)] --> SCH["Read schema<br/>columns, keys, sample rows"]
         SCH --> DESC["LLM writes a short<br/>description of each table"]
-        DESC --> EMB["Embed descriptions<br/>bge-small, runs locally"]
+        DESC --> EMB["Embed name, columns and<br/>description of each table<br/>bge-small, runs locally"]
         EMB --> VS[(ChromaDB)]
     end
 
@@ -134,19 +142,20 @@ flowchart TB
    one purchased track... useful for sales and revenue questions". Column names alone
    match questions poorly, and descriptions bridge that vocabulary gap. They are saved to
    `data/index/<db>/table_docs.json`, which you can read and edit by hand.
-3. **Embed and store** ([`indexing/indexer.py`](src/text2sql/indexing/indexer.py)). The
-   descriptions are embedded with `BAAI/bge-small-en-v1.5`, which runs locally on the CPU
-   through ONNX, and stored in a persistent ChromaDB collection.
+3. **Embed and store** ([`indexing/indexer.py`](src/text2sql/indexing/indexer.py)). Each
+   table's name, column list and description are embedded together with
+   `BAAI/bge-small-en-v1.5`, which runs locally on the CPU through ONNX, and stored in a
+   persistent ChromaDB collection.
 
 ### Online: answering a question
 
 0. **Follow-ups become standalone questions**
    ([`conversation.py`](src/text2sql/conversation.py)). In a conversation, "and in
    2012?" only makes sense next to the previous question. The helper model rewrites it,
-   using the last three questions and their SQL, into "How many invoices were issued in
-   2012?", and every later step works on that. The app shows the rewrite as
-   *Interpreted as: ...*, so a wrong reading is easy to spot. The first question of a
-   conversation skips this step.
+   using the last three questions with their SQL and answers, into "How many invoices
+   were issued in 2012?", and every later step works on that. The app shows the rewrite
+   as *Interpreted as: ...*, so a wrong reading is easy to spot. The first question of a
+   conversation skips this step, and so does an example clicked in the sidebar.
 1. **Vector search** ([`retrieval/retriever.py`](src/text2sql/retrieval/retriever.py)).
    The question is embedded and the top-N (default 6) most similar tables are
    retrieved. This step favors recall.
@@ -194,8 +203,8 @@ the evaluation all call the same `Pipeline.ask()`.
 ## Setup
 
 You need **Python 3.11+** and **git**. The steps below take about 5 minutes. The only
-downloads are Python packages, the 1 MB sample database and a 65 MB embedding model;
-no large LLM weights.
+downloads are Python packages, the sample databases (Chinook 1 MB; Sakila about 5 MB,
+optional) and a 65 MB embedding model; no large LLM weights.
 
 ### 1. Clone and install
 
@@ -236,8 +245,8 @@ python -m text2sql index                        # and --db data/sakila.db for Sa
 ```
 
 This saves [Chinook](https://github.com/lerocha/chinook-database) to
-`data/chinook.db`. Chinook is a digital music store with 11 tables: artists, albums,
-tracks, genres, playlists, customers, employees, invoices and invoice lines. The
+`data/chinook.db`. Chinook is a digital music store with 11 tables, including artists,
+albums, tracks, genres, playlists, customers, employees, invoices and invoice lines. The
 optional [Sakila](https://github.com/jOOQ/sakila) database is a DVD-rental chain with
 15 tables; see [Use your own database](#use-your-own-database).
 
@@ -266,9 +275,10 @@ without `make`, run the commands shown in it.
 streamlit run app/streamlit_app.py
 ```
 
-Type a question or click an example in the sidebar. Follow-up questions work: ask "How
-many invoices were issued in 2010?", then "and in 2012?", then "Which country had the
-most of them?". Each answer shows:
+Pick Chinook or Sakila under **Database** in the sidebar (the app downloads and indexes
+a sample database the first time you pick it), then type a question or click an
+example. Follow-up questions work: ask "How many invoices were issued in 2010?", then
+"and in 2012?", then "Which country had the most of them?". Each answer shows:
 
 1. **The answer** in one or two sentences, with the key numbers
 2. **Analysis**: up to three observations (comparisons, concentration, trends) and caveats
@@ -336,10 +346,13 @@ completely different domain (films, actors, inventory, rentals, payments, stores
 python scripts/download_sample_db.py sakila
 python -m text2sql index --db data/sakila.db
 python -m text2sql ask --db data/sakila.db "Which film categories generate the most rental revenue?"
-T2S_DB_PATH=data/sakila.db streamlit run app/streamlit_app.py    # PowerShell: $env:T2S_DB_PATH="data/sakila.db"
+streamlit run app/streamlit_app.py          # then pick Sakila under Database in the sidebar
 ```
 
-No code or prompt is specific to either database. The results are in
+The pipeline code and prompts name no table or column of either database. One caveat:
+the SQL prompt's single example of a proxy column (a billing country standing in for a
+customer's country) came from a Chinook dev-set failure; see
+[Error analysis](#error-analysis-three-fixes-found-by-testing). The results are in
 [Evaluation](#evaluation).
 
 ![Sakila answer](docs/images/sakila-categories.png)
@@ -364,13 +377,15 @@ To get better results:
 ## Deploy a free public demo
 
 [Streamlit Community Cloud](https://streamlit.io/cloud) hosts public Streamlit apps for
-free, straight from a GitHub repository. The app is ready for it: on a fresh server it
-downloads the sample databases and builds their indexes by itself, and visitors can
-switch between Chinook and Sakila in the sidebar.
+free, straight from a GitHub repository; this project's
+[demo](https://text2sql-analyst-88gmykwbxbueyfjt6db6px.streamlit.app/) runs there. The
+app is ready for it: on a fresh server it downloads the sample databases and builds
+their indexes by itself, and visitors can switch between Chinook and Sakila in the
+sidebar. To host your own copy, fork the repository and use your fork below.
 
 1. Sign in at [share.streamlit.io](https://share.streamlit.io) with your GitHub account.
-2. **Create app** -> deploy from GitHub: repository `VinayakMokashi/text2sql-analyst`,
-   branch `main`, main file `app/streamlit_app.py`.
+2. **Create app** -> deploy from GitHub: your fork of `text2sql-analyst`, branch
+   `main`, main file `app/streamlit_app.py`.
 3. Under **Advanced settings**, choose Python 3.12 and paste the secrets from
    [`.streamlit/secrets.example.toml`](.streamlit/secrets.example.toml), with your real
    `GROQ_API_KEY`.
@@ -380,8 +395,10 @@ switch between Chinook and Sakila in the sidebar.
 **Protect your quota.** Every visitor spends your free Groq tokens, and the free tier
 is shared by everything that uses your account (about 200k tokens per model per day at
 the time of writing). `T2S_DEMO_DAILY_LIMIT` caps questions per day across all
-visitors, and `T2S_DEMO_SESSION_LIMIT` caps them per visit; the sidebar shows what is
-left. At 40 questions a day the demo uses well under half of a model's daily budget.
+visitors, and `T2S_DEMO_SESSION_LIMIT` caps them per visit; the sidebar shows how many
+of today's questions are left. Measured on Chinook, a question uses about 1.2–1.9k
+tokens of the helper model's quota and 0.7–1.4k of the SQL model's, so 40 questions a
+day use about a third of the helper model's daily budget.
 The count lives in the server process, so it starts over if Streamlit restarts the app
 (for example after it has been asleep).
 
@@ -399,7 +416,7 @@ The pipeline uses **two model roles**:
 | Role | Used for | Default (Groq) | Why |
 |---|---|---|---|
 | **SQL model** (`T2S_SQL_MODEL`) | SQL generation and repair | `openai/gpt-oss-120b` | Accuracy matters most here. The largest open-weight model on Groq's free tier (a 117B mixture-of-experts, Apache 2.0) reasons briefly before writing SQL |
-| **Helper model** (`T2S_HELPER_MODEL`) | table descriptions, table selection, analysis | `qwen/qwen3.8-27b` | Easier tasks, where speed matters: about 0.2 s per call and accurate. Using a second model also gives a second free-tier quota |
+| **Helper model** (`T2S_HELPER_MODEL`) | table descriptions, table selection, follow-up rewriting, analysis | `qwen/qwen3.8-27b` | Easier tasks, where speed matters: about 0.2–0.6 s per call and accurate. Using a second model also gives a second free-tier quota |
 
 See [Evaluation](#evaluation) for how the three models compare on three question sets.
 
@@ -427,9 +444,10 @@ the SQL. Set `T2S_SQL_REASONING_EFFORT` / `T2S_HELPER_REASONING_EFFORT` to `low`
 Free-tier model lists and limits change over time. Run `python -m text2sql models`
 to see what your key can use today, and check your provider's console for quotas. At the
 time of writing, Groq allows each model 1,000 requests per day and 8,000 tokens per
-minute. One question makes 3 requests and uses roughly 2–3k tokens per model, so a
-burst of questions may pause briefly: rate-limit responses are retried automatically
-after the wait the server asks for.
+minute. A question makes 3 requests (2 to the helper model, 1 to the SQL model) and
+uses about 1–2k tokens of each model's quota; a follow-up adds one request to rewrite
+it, and each repair one more. A burst of questions may therefore pause briefly:
+rate-limit responses are retried automatically after the wait the server asks for.
 
 ### Run fully offline with Ollama
 
@@ -479,9 +497,10 @@ for data that does not exist, such as salaries, ratings or awards.
 
 - **Execution accuracy (EX)**: the predicted query returns the same data as the gold
   query. It is slightly lenient in the ways a human grader would accept: extra columns
-  are fine, row and column order are ignored, numbers are compared at 2 decimal places,
-  and name questions accept both `FirstName, LastName` and a concatenated full name. Row
-  counts must match exactly. See [`evaluation.py`](src/text2sql/evaluation.py).
+  are fine, row and column order are ignored, and numbers are compared at 2 decimal
+  places. Row counts must match exactly. See [`evaluation.py`](src/text2sql/evaluation.py).
+  Questions about people have two gold queries, one returning `FirstName, LastName` and
+  one a combined "First Last" name, and a match with either counts.
 - **Declined unanswerable / false refusals**: unanswerable questions correctly declined,
   and answerable questions wrongly declined.
 - **Table recall@N**: share of the gold query's tables among the vector-search
@@ -496,7 +515,11 @@ for data that does not exist, such as salaries, ratings or awards.
 All models are open-weight and were served by Groq's free tier. In every run the helper
 model (`qwen/qwen3.8-27b`) chose the tables once per question, and all SQL models got
 that same choice, so differences come from SQL generation alone. The full logs, with
-every generated query, are in [`eval/results/`](eval/results/).
+every generated query, are in [`eval/results/`](eval/results/). They were produced
+before the end-to-end review of 22 September (the last at commit `624a725`). The review
+changed how SQL is pulled out of replies and how schemas and keys are read, but not the
+prompts, and re-scoring the logged queries with today's metric gives the same numbers;
+the current code has not been re-run on all three sets.
 
 Execution accuracy on answerable questions:
 
@@ -515,8 +538,9 @@ Per-difficulty breakdowns for each set are in its `summary.md`:
 
 - Once the right tables are in the prompt, all three models answer nearly everything on
   these schemas. The only miss in the final runs was a formatting difference:
-  `gpt-oss-20b` answered "Edwards, Nancy", while the gold answer has first and last name
-  as separate values. A human would mark it correct; strict execution accuracy does not.
+  `gpt-oss-20b` answered "Edwards, Nancy", while the gold queries accept "Nancy" and
+  "Edwards" as two values or "Nancy Edwards", not last name first. A human would mark it
+  correct; this project's EX does not.
 - **Qwen3.8-27B matches `gpt-oss-120b`'s accuracy at about a third of the latency.**
   `gpt-oss-120b` stays the default SQL model for two reasons. A different model from the
   helper doubles the free-tier quota, and it keeps a reasoning model on the hardest step.
@@ -532,7 +556,7 @@ Per-difficulty breakdowns for each set are in its `summary.md`:
 
 | Found on | Problem | Fix |
 |---|---|---|
-| Chinook dev, first run | A needed table ranked 7th in vector search ("genres by *tracks sold*" needs `InvoiceLine`), so the selector concluded there was no sales data | The selector also sees the names of all other tables, and may pick any of them |
+| Chinook dev, first run | A needed table ranked 8th in vector search, outside the top 6 ("genres by *tracks sold*" needs `InvoiceLine`), so the selector concluded there was no sales data | The selector also sees the names of all other tables, and may pick any of them |
 | Chinook dev, first run | The SQL model was overly literal: no customer-country column among the selected tables, so it refused, although `Invoice.BillingCountry` answers the question | The prompt allows a close proxy column and reserves `CANNOT_ANSWER` for questions nothing in the schema can answer |
 | Sakila, first run | "Most rental revenue by category" needs 5 tables. The selector chose them correctly, but the code silently trimmed the list to 4 and dropped `category` | The cap was raised from 4 to 6, and any trimming is now shown in the answer details |
 
@@ -546,25 +570,30 @@ Per-difficulty breakdowns for each set are in its `summary.md`:
 \* by joining the missing table from memory, as described above.
 
 The held-out set scored 100% for all three models both before and after fix 3
-([before](eval/results/heldout/baseline/), [after](eval/results/heldout/)). All three
-fixes are general (none mentions a specific question), and every unanswerable question
-is still declined. The held-out and Sakila sets were committed to git before any model
-was run on them, which the commit history shows.
+([before](eval/results/heldout/baseline/), [after](eval/results/heldout/)). The fixes
+name no question, and every unanswerable question is still declined. They are not
+entirely free of Chinook, though: the proxy-column example in the SQL prompt (fix 2) is
+Chinook's own billing-country case, and in the held-out run before fix 3 (table cap of
+4), all three models answered t14 through that same shortcut. The held-out and Sakila
+sets were committed to git before any model was run on them, which the commit history
+shows.
 
 ### Rerun it
 
 ```bash
 python eval/run_eval.py                                                  # dev set, model from .env
-python eval/run_eval.py --questions eval/heldout.jsonl --out eval/results/heldout
-T2S_DB_PATH=data/sakila.db python eval/run_eval.py --questions eval/sakila_questions.jsonl --out eval/results/sakila
-python eval/run_eval.py --models openai/gpt-oss-120b --ids h01 h02 --sleep 0   # goes to results/partial/
+python eval/run_eval.py --questions eval/heldout.jsonl                  # -> results/heldout/
+T2S_DB_PATH=data/sakila.db python eval/run_eval.py --questions eval/sakila_questions.jsonl   # -> results/sakila/
+python eval/run_eval.py --models openai/gpt-oss-120b --ids h01 h02 --sleep 0   # -> results/partial/
 ```
 
 Each run writes a per-question log (`<out>/<model>.jsonl`, with `/` in the model name
 replaced by `_`, e.g. `openai_gpt-oss-120b.jsonl`) with every SQL query and failure
-reason. Runs limited with `--ids` or `--limit` go to `results/partial/`, so they never
-overwrite the full logs. The `summary.md` in that folder covers every model logged there, so
-models can be added to a comparison one run at a time. To add a model cheaply, pass
+reason. `--out` defaults to `results/` for the dev set and to `results/<set name>/` for
+the others, so one set's run never overwrites another's logs. Runs limited with `--ids`
+or `--limit` go to a `partial/` folder inside the output folder, so they never
+overwrite the full logs either. The `summary.md` in an output folder covers every model
+logged there, so models can be added to a comparison one run at a time. To add a model cheaply, pass
 `--reuse-selection <earlier log>.jsonl`. This replays the tables an earlier run used,
 instead of calling the helper model again, which halves the LLM calls and gives the new
 model exactly the same tables.
@@ -589,7 +618,7 @@ The query runs against the database only after three independent layers:
    four operations a query needs (select, read, function call, recursive CTE). This
    layer holds where sqlglot's grammar and SQLite's differ; for example, it refuses the
    `pragma_table_info()` table function, which parses as an ordinary SELECT.
-3. **Resource limits**: at most `T2S_MAX_ROWS` rows are fetched (default 200; the SQL
+3. **Resource limits**: at most `T2S_MAX_ROWS` rows are returned (default 200; the SQL
    is not rewritten), no single value may exceed 1 MB (so an expression like
    `hex(zeroblob(...))` cannot build a gigabyte string), and a progress handler aborts any
    query that runs longer than `T2S_QUERY_TIMEOUT_S` (default 10 s).
@@ -597,9 +626,11 @@ The query runs against the database only after three independent layers:
 Rejected queries return a readable error. The pipeline feeds that error back to the
 model once or twice to fix, and then stops.
 
-Also: API keys live only in `.env`, which is git-ignored. Result rows are sent to the LLM
-provider for the analysis step, so use a local model (Ollama) for data that must not
-leave your machine.
+Also: API keys come from `.env`, environment variables or Streamlit secrets, and `.env`
+and `.streamlit/secrets.toml` are git-ignored. The LLM provider sees the schema with a
+few sample rows per table, up to 40 result rows for the analysis, and recent questions
+with their SQL and answers when a follow-up is rewritten. Use a local model (Ollama)
+for data that must not leave your machine.
 
 ---
 
@@ -632,15 +663,16 @@ text2sql-analyst/
 ### Tests
 
 ```bash
-pytest          # about 150 tests, a few seconds, no network or API key needed
+pytest          # about 180 tests, a few seconds, no network or API key needed
 ruff check .
 ```
 
-The tests use a tiny in-memory shop database, a scripted `FakeLLM` and a
+The tests use a tiny shop database in a temporary folder, a scripted `FakeLLM` and a
 bag-of-words hashing embedder, so they are fast and deterministic. They cover the
 guardrails (including attempted writes, multi-statement injection, `ATTACH`/`PRAGMA`,
-data-modifying CTEs and timeouts), retrieval and selection, prompt building, the
-self-correction loop, abstention, the chart rules and the evaluation metric.
+data-modifying CTEs, the SQLite authorizer and timeouts), retrieval and selection,
+prompt building, the self-correction loop, abstention, follow-up rewriting, the chart
+rules, the evaluation metric, and the demo's self-setup and question budget.
 
 ---
 
@@ -666,9 +698,10 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   statistics, but it is generated text. The SQL and table are shown so you can verify.
 - **Small, self-written eval sets.** 87 questions across three sets are enough to
   compare models and catch regressions, not to claim benchmark numbers. The dev set was
-  used for tuning, so its scores are optimistic. The held-out and Sakila sets were never
-  used for tuning, but they were written by the same person who built the system. A
-  public benchmark is the next step (see below).
+  used for tuning, so its scores are optimistic. The held-out set was never used for
+  tuning. The Sakila set exposed one bug (fix 3), so its after-fix score is not an
+  untouched test. Both were written by the same person who built the system. A public
+  benchmark is the next step (see below).
 - **Free-tier limits.** Hosted free tiers cap requests and tokens per day.
 
 **Future scope**
@@ -701,7 +734,8 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   - [gpt-oss-120b and gpt-oss-20b](https://huggingface.co/openai/gpt-oss-120b) by
     OpenAI, open-weight (Apache 2.0)
   - [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Alibaba Qwen (Apache 2.0);
-    Qwen2.5-Coder (Apache 2.0) is suggested for local use
+    Qwen2.5-Coder is suggested for local use (Apache 2.0 for most sizes; the 3B model
+    uses the Qwen Research License)
   - `BAAI/bge-small-en-v1.5` embeddings (MIT)
 - **Libraries**: [sqlglot](https://github.com/tobymao/sqlglot) (MIT),
   [ChromaDB](https://github.com/chroma-core/chroma) (Apache 2.0),
@@ -709,7 +743,11 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   [Streamlit](https://streamlit.io) (Apache 2.0),
   [OpenAI Python SDK](https://github.com/openai/openai-python) (Apache 2.0), used only as
   a client for OpenAI-compatible endpoints,
-  [pandas](https://pandas.pydata.org), [Rich](https://github.com/Textualize/rich)
+  [pandas](https://pandas.pydata.org) (BSD 3-Clause),
+  [Altair](https://altair-viz.github.io) (BSD 3-Clause),
+  [pydantic-settings](https://github.com/pydantic/pydantic-settings) (MIT),
+  [python-dotenv](https://github.com/theskumar/python-dotenv) (BSD 3-Clause),
+  [Rich](https://github.com/Textualize/rich) (MIT)
 - **Hosting of open models**: [Groq](https://groq.com), [Ollama](https://ollama.com)
 
 ## License

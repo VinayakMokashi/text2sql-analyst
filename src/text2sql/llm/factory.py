@@ -60,8 +60,9 @@ def create_llm(settings: Settings, role: Role = "sql", model: str | None = None)
     """Create the LLM for a pipeline role.
 
     ``sql`` is used for SQL generation and repair (accuracy matters most); ``helper`` is
-    used for table descriptions, table selection and the final analysis, where a smaller
-    and faster model is usually good enough. ``model`` overrides the configured name.
+    used for table descriptions, table selection, follow-up rewriting and the final
+    analysis, where a smaller and faster model is usually good enough. ``model``
+    overrides the configured name.
     """
     name = model or (settings.sql_model if role == "sql" else settings.helper_model)
     provider = settings.llm_provider.lower()
