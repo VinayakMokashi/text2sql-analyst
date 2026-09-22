@@ -6,13 +6,31 @@ Run from the repository root:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Streamlit Community Cloud runs this file from a plain checkout without installing the
+# project, so make the src/ layout importable. After `pip install -e .` this changes
+# nothing. (The imports below therefore come after code; see ruff's per-file ignores.)
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from text2sql.analysis import ChartSpec
 from text2sql.config import get_settings
-from text2sql.pipeline import Pipeline, PipelineResult
+from text2sql.demo import DailyBudget, ensure_sample_ready
+from text2sql.indexing import FastEmbedEmbedder
+from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
+
+REPO_URL = "https://github.com/VinayakMokashi/text2sql-analyst"
+# The bundled sample databases a visitor can switch between. The app downloads and
+# indexes them itself on first use, from the descriptions committed next to this file.
+SAMPLE_NAMES = {"chinook": "Chinook (music store)", "sakila": "Sakila (DVD rentals)"}
+DESCRIPTIONS_DIR = Path(__file__).parent / "sample_descriptions"
 
 # Sidebar examples for the bundled sample databases (keyed by file name); any other
 # database simply shows no examples.
@@ -43,9 +61,23 @@ SERIES_COLOR = {"light": "#2a78d6", "dark": "#3987e5"}
 st.set_page_config(page_title="Text2SQL Analyst", page_icon=":bar_chart:", layout="centered")
 
 
-@st.cache_resource(show_spinner="Loading models and index...")
-def get_pipeline() -> Pipeline:
-    return Pipeline.from_settings(get_settings())
+@st.cache_resource(show_spinner=False)
+def get_embedder(model_name: str) -> FastEmbedEmbedder:
+    return load_embedder(get_settings())  # model_name only keys the cache
+
+
+@st.cache_resource(show_spinner="Preparing the database and its index (first run only)...")
+def get_pipeline(db_path: str) -> Pipeline:
+    settings = get_settings().model_copy(update={"db_path": Path(db_path)})
+    embedder = get_embedder(settings.embedding_model)
+    ensure_sample_ready(settings, DESCRIPTIONS_DIR, lambda: embedder)
+    return Pipeline.from_settings(settings, embedder=embedder)
+
+
+@st.cache_resource(show_spinner=False)
+def get_budget(limit: int | None) -> DailyBudget:
+    """One budget per server process, shared by every visitor."""
+    return DailyBudget(limit)
 
 
 def md(text: str) -> str:
@@ -197,22 +229,42 @@ try:
 except Exception as exc:  # noqa: BLE001
     settings, setup_error = None, exc
 
+db_path = settings.db_path if settings else None
 with st.sidebar:
     st.header("Text2SQL Analyst")
     st.write(
         "Ask a question about the database in plain English. The app finds the relevant "
         "tables, writes SQL, runs it read-only and explains the result."
     )
-    examples = EXAMPLES.get(settings.db_path.stem.lower(), []) if settings else []
+    if settings and settings.db_path.stem.lower() in SAMPLE_NAMES:
+        names = list(SAMPLE_NAMES)
+        choice = st.radio(
+            "Database",
+            names,
+            index=names.index(settings.db_path.stem.lower()),
+            format_func=SAMPLE_NAMES.get,
+            key="sample_db",
+        )
+        if st.session_state.get("active_db") != choice:
+            st.session_state.history = []  # another database starts a new conversation
+            st.session_state.active_db = choice
+        db_path = settings.db_path.with_name(f"{choice}.db")
+    examples = EXAMPLES.get(db_path.stem.lower(), []) if db_path else []
     if examples:
         st.subheader("Try an example")
     for example in examples:
         if st.button(example, width="stretch"):
             st.session_state.pending = example
+    if settings and settings.demo_daily_limit is not None:
+        left = get_budget(settings.demo_daily_limit).remaining()
+        st.caption(
+            f"Free demo: {left} of {settings.demo_daily_limit} questions left today, shared "
+            f"by all visitors. [Run your own copy]({REPO_URL}) for unlimited use."
+        )
     if settings:
         st.subheader("Configuration")
         st.markdown(
-            f"- Database: `{settings.db_path.name}`\n"
+            f"- Database: `{db_path.name}`\n"
             f"- Provider: `{settings.llm_provider}`\n"
             f"- SQL model: `{settings.sql_model}`\n"
             f"- Helper model: `{settings.helper_model}`\n"
@@ -225,24 +277,45 @@ with st.sidebar:
         st.rerun()
 
 st.title("Ask your data")
-if settings:
+if db_path:
     st.caption(
-        f"Connected to **{settings.db_path.name}**. Answers come from the data, not from "
+        f"Connected to **{db_path.name}**. Answers come from the data, not from "
         "the model's memory; open *SQL and how it was produced* to check the work."
     )
 
 try:
     if setup_error is not None:
         raise setup_error
-    pipeline = get_pipeline()
+    pipeline = get_pipeline(str(db_path))
 except Exception as exc:  # noqa: BLE001 - show setup problems in the UI, not a traceback
     st.error(f"**Setup problem:** {md(str(exc))}")
     st.info(
-        "See the README's *Setup* section: download the database, add your API key to "
-        "`.env`, and run `python -m text2sql index`. Then click *Reload settings and "
-        "index* in the sidebar."
+        "See the README's *Setup* section: add your API key to `.env`, and for your own "
+        "database run `python -m text2sql index`. Then click *Reload settings and index* "
+        "in the sidebar."
     )
     st.stop()
+
+
+def within_limits() -> bool:
+    """Spend one question from the visitor's and the day's budget, or explain why not."""
+    per_visit = settings.demo_session_limit
+    asked = st.session_state.get("asked", 0)
+    if per_visit is not None and asked >= per_visit:
+        st.info(
+            f"This demo allows {per_visit} questions per visit. "
+            f"[Run your own copy]({REPO_URL}) to keep going."
+        )
+        return False
+    if not get_budget(settings.demo_daily_limit).take():
+        st.info(
+            "The free demo has used up today's questions; the budget resets at midnight "
+            f"UTC. You can also [run your own copy]({REPO_URL})."
+        )
+        return False
+    st.session_state.asked = asked + 1
+    return True
+
 
 history: list[PipelineResult] = st.session_state.setdefault("history", [])
 for past in history:
@@ -257,9 +330,10 @@ if question:
     with st.chat_message("user"):
         st.markdown(md(question))
     with st.chat_message("assistant"):
-        with st.spinner("Finding tables, writing SQL, analysing..."):
-            # Earlier answers give follow-up questions their context.
-            context = [past.as_turn() for past in history if past.status != "error"]
-            result = pipeline.ask(question, history=context)
-        render_result(result)
-    history.append(result)
+        if within_limits():
+            with st.spinner("Finding tables, writing SQL, analysing..."):
+                # Earlier answers give follow-up questions their context.
+                context = [past.as_turn() for past in history if past.status != "error"]
+                result = pipeline.ask(question, history=context)
+            render_result(result)
+            history.append(result)
