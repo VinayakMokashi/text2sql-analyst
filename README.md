@@ -218,12 +218,15 @@ everything locally, see [Run fully offline with Ollama](#run-fully-offline-with-
 ### 3. Download the sample database
 
 ```bash
-python scripts/download_chinook.py
+python scripts/download_sample_db.py            # Chinook (default)
+python scripts/download_sample_db.py sakila     # optional second database
 ```
 
 This saves [Chinook](https://github.com/lerocha/chinook-database) to
 `data/chinook.db`. Chinook is a digital music store with 11 tables: artists, albums,
-tracks, genres, playlists, customers, employees, invoices and invoice lines.
+tracks, genres, playlists, customers, employees, invoices and invoice lines. The
+optional [Sakila](https://github.com/jOOQ/sakila) database is a DVD-rental chain with
+15 tables; see [Use your own database](#use-your-own-database).
 
 ### 4. Build the index
 
@@ -306,8 +309,29 @@ python -m text2sql index        # builds data/index/<your db name>/
 streamlit run app/streamlit_app.py
 ```
 
-Each database gets its own index folder, so you can switch back and forth. To get
-better results:
+Each database gets its own index folder, so you can switch back and forth.
+
+### Try it on a second database: Sakila
+
+To check that nothing is tuned to Chinook, the project also runs on
+[Sakila](https://github.com/jOOQ/sakila), a DVD-rental chain with 15 tables and a
+completely different domain (films, actors, inventory, rentals, payments, stores):
+
+```bash
+python scripts/download_sample_db.py sakila
+python -m text2sql index --db data/sakila.db
+python -m text2sql ask --db data/sakila.db "Which film categories generate the most rental revenue?"
+T2S_DB_PATH=data/sakila.db streamlit run app/streamlit_app.py    # PowerShell: $env:T2S_DB_PATH="data/sakila.db"
+```
+
+No code or prompt is specific to either database. The results are in
+[Evaluation](#evaluation).
+
+![Sakila answer](docs/images/sakila-categories.png)
+
+### Tips for your own data
+
+To get better results:
 
 - **Declare foreign keys** in the schema. The join hints and the bridge-table search
   both rely on them.
@@ -336,7 +360,7 @@ The pipeline uses **two model roles**:
 | **SQL model** (`T2S_SQL_MODEL`) | SQL generation and repair | `openai/gpt-oss-120b` | Accuracy matters most here. The largest open-weight model on Groq's free tier (a 117B mixture-of-experts, Apache 2.0) reasons briefly before writing SQL |
 | **Helper model** (`T2S_HELPER_MODEL`) | table descriptions, table selection, analysis | `qwen/qwen3.8-27b` | Easier tasks, where speed matters: about 0.2 s per call and accurate. Using a second model also gives a second free-tier quota |
 
-See [Evaluation](#evaluation) for how these compare on the question set.
+See [Evaluation](#evaluation) for how the three models compare on three question sets.
 
 Why a hosted default rather than a local one? Running a 7B model on a typical laptop
 CPU takes 15–40 s per question and needs a 4–5 GB download. Groq serves open-weight
@@ -397,92 +421,114 @@ and does better with prompt tuning.
 
 ## Evaluation
 
-[`eval/questions.jsonl`](eval/questions.jsonl) contains **47 hand-written questions**
-about Chinook, each with gold SQL: 14 easy (one table), 15 medium (one join or
-grouping), 14 hard (multi-hop joins, subqueries, self-joins, conditional aggregation),
-and 4 **unanswerable** questions such as salaries or ratings, which the system should
-decline. Every gold query was run and checked for a single correct answer (for example,
-no ties at a "top 5" cut-off).
+Three hand-written question sets, each with gold SQL that was run and checked to have
+exactly one correct answer (for example, no ties at a "top 5" cut-off):
+
+| Set | Questions | Purpose |
+|---|---|---|
+| [Chinook dev](eval/questions.jsonl) | 47: 14 easy, 15 medium, 14 hard, 4 unanswerable | Used during development to find and fix problems |
+| [Chinook held-out](eval/heldout.jsonl) | 24: 20 answerable, 4 unanswerable | Written after tuning and committed before any model saw it: the honest test |
+| [Sakila](eval/sakila_questions.jsonl) | 16: 14 answerable, 2 unanswerable | A second database with a different domain, to check that nothing is tuned to Chinook |
+
+"Easy" means one table; "hard" means multi-hop joins, subqueries, self-joins, NULL traps
+(`NOT IN` with a NULL manager), or conditional aggregation. Unanswerable questions ask
+for data that does not exist, such as salaries, ratings or awards.
 
 **Metrics**
 
 - **Execution accuracy (EX)**: the predicted query returns the same data as the gold
   query. It is slightly lenient in the ways a human grader would accept: extra columns
   are fine, row and column order are ignored, numbers are compared at 2 decimal places,
-  and some questions accept both `FirstName, LastName` and a concatenated full name. Row
+  and name questions accept both `FirstName, LastName` and a concatenated full name. Row
   counts must match exactly. See [`evaluation.py`](src/text2sql/evaluation.py).
 - **Declined unanswerable / false refusals**: unanswerable questions correctly declined,
   and answerable questions wrongly declined.
 - **Table recall@N**: share of the gold query's tables among the vector-search
   candidates. **Final schema recall**: the same, after LLM selection and join expansion,
-  meaning the tables the SQL model actually saw.
-- **Latency**: wall-clock time per question for retrieval, selection, generation,
-  execution and repairs; the analysis step is skipped because it does not affect EX.
+  meaning the tables the SQL model actually saw. A valid shortcut (such as
+  `Invoice.BillingCountry` instead of joining `Customer`) lowers recall without being wrong.
+- **Avg SQL latency**: the model's response time plus query execution. It excludes time
+  spent waiting out free-tier rate limits.
 
 ### Results
 
-All models are open-weight and were served by Groq's free tier. The helper model
-(`qwen/qwen3.8-27b`) handled table selection for every run, and its choice was shared,
-so each SQL model saw exactly the same tables. The full logs, with every generated query,
-are in [`eval/results/`](eval/results/).
+All models are open-weight and were served by Groq's free tier. In every run the helper
+model (`qwen/qwen3.8-27b`) chose the tables once per question, and all SQL models got
+that same choice, so differences come from SQL generation alone. The full logs, with
+every generated query, are in [`eval/results/`](eval/results/).
 
-| SQL model | EX (43 answerable) | Easy | Medium | Hard | Declined unanswerable | False refusals | Table recall@6 | Final schema recall | Avg SQL latency |
-|---|---|---|---|---|---|---|---|---|---|
-| `openai/gpt-oss-120b` (default) | **100%** | 100% | 100% | 100% | 4/4 | 0 | 99.2% | 100% | 0.95 s |
-| `openai/gpt-oss-20b` | **97.7%** | 100% | 100% | 92.9% | 4/4 | 0 | 99.2% | 100% | 0.79 s |
+Execution accuracy on answerable questions:
 
-*Avg SQL latency* is the model's response time plus query execution, averaged over the
-questions that reached SQL generation. It excludes time spent waiting out free-tier
-rate limits.
+| SQL model | Chinook dev | Chinook held-out | Sakila | Unanswerable declined | Avg SQL latency |
+|---|---|---|---|---|---|
+| `openai/gpt-oss-120b` (default) | **100%** | **100%** | **100%** | 10/10 | ~1.0 s |
+| `openai/gpt-oss-20b` | **97.7%** | **100%** | **100%** | 10/10 | ~0.8 s |
+| `qwen/qwen3.8-27b` | **100%** | **100%** | **100%** | 10/10 | ~0.35 s |
+
+Per-difficulty breakdowns for each set are in its `summary.md`:
+[dev](eval/results/summary.md), [held-out](eval/results/heldout/summary.md),
+[Sakila](eval/results/sakila/summary.md). The dev-set runs used the earlier table cap of
+4 (see fix 3 below); none of the dev questions needs more than 4 tables.
 
 **Takeaways**
 
-- On a schema this size, both models get nearly everything right once the right tables
-  are in the prompt. The bigger model's advantage shows only on the hard questions.
-- The one `gpt-oss-20b` miss (h13) was really a formatting difference: it answered
-  "Edwards, Nancy", while the gold answer has first and last name as separate values. A
-  human would mark it correct; strict execution accuracy does not.
-- No query needed self-correction in these runs. The repair loop is exercised by the unit
-  tests, and in practice it matters more for smaller local models.
+- Once the right tables are in the prompt, all three models answer nearly everything on
+  these schemas. The only miss in the final runs was a formatting difference:
+  `gpt-oss-20b` answered "Edwards, Nancy", while the gold answer has first and last name
+  as separate values. A human would mark it correct; strict execution accuracy does not.
+- **Qwen3.8-27B matches `gpt-oss-120b`'s accuracy at about a third of the latency.**
+  `gpt-oss-120b` stays the default SQL model for two reasons. A different model from the
+  helper doubles the free-tier quota, and it keeps a reasoning model on the hardest step.
+  Switching is one line in `.env`.
+- No query needed self-correction. The repair loop is exercised by the unit tests, and it
+  matters more for smaller local models.
+- **A caution about memorization.** Chinook and Sakila are famous public sample databases,
+  so models have seen them during training. In one Sakila run, Qwen joined a `category`
+  table that was not in its prompt, from memory, and happened to be right. Expect lower
+  scores on a private schema that no model has seen.
 
-**Error analysis: what the first run taught us.** The first (baseline) run scored lower,
-because of three **false refusals**, questions the system declined although the data
-could answer them:
+### Error analysis: three fixes found by testing
 
-| Run | `gpt-oss-120b` | `gpt-oss-20b` | False refusals (both models) |
-|---|---|---|---|
-| Baseline ([`eval/results/baseline/`](eval/results/baseline/)) | 95.3% | 93.0% | 2 + 2 |
-| After the two fixes below | 100% | 97.7% | 0 + 0 |
+| Found on | Problem | Fix |
+|---|---|---|
+| Chinook dev, first run | A needed table ranked 7th in vector search ("genres by *tracks sold*" needs `InvoiceLine`), so the selector concluded there was no sales data | The selector also sees the names of all other tables, and may pick any of them |
+| Chinook dev, first run | The SQL model was overly literal: no customer-country column among the selected tables, so it refused, although `Invoice.BillingCountry` answers the question | The prompt allows a close proxy column and reserves `CANNOT_ANSWER` for questions nothing in the schema can answer |
+| Sakila, first run | "Most rental revenue by category" needs 5 tables. The selector chose them correctly, but the code silently trimmed the list to 4 and dropped `category` | The cap was raised from 4 to 6, and any trimming is now shown in the answer details |
 
-1. **A needed table ranked 7th in vector search** ("top genres by *tracks sold*" needs
-   `InvoiceLine`), so the selector concluded there was no sales data. *Fix:* the selector
-   now sees the other table names too, and may pick any of them.
-2. **The SQL model was overly literal.** For "revenue from customers in the USA", it
-   refused because there is no customer-country column among the selected tables, although
-   `Invoice.BillingCountry` answers it. *Fix:* the prompt allows a close proxy column and
-   reserves `CANNOT_ANSWER` for questions nothing in the schema can answer.
+| Set | Run | `gpt-oss-120b` | `gpt-oss-20b` | `qwen3.8-27b` |
+|---|---|---|---|---|
+| Chinook dev | [first run](eval/results/baseline/) | 95.3% | 93.0% | not run |
+| Chinook dev | after fixes 1–2 | 100% | 97.7% | 100% |
+| Sakila | [first run](eval/results/sakila/baseline/) (cap of 4) | 92.9% | 92.9% | 100%\* |
+| Sakila | after fix 3 | 100% | 100% | 100% |
 
-Both fixes are general (neither mentions a specific question). All four genuinely
-unanswerable questions are still declined. The caveat is that the same 47 questions
-were used to find the problems and to measure the fixes, so treat these numbers as
-optimistic; see [Limitations](#limitations-and-future-work).
+\* by joining the missing table from memory, as described above.
+
+The held-out set scored 100% for all three models both before and after fix 3
+([before](eval/results/heldout/baseline/), [after](eval/results/heldout/)). All three
+fixes are general (none mentions a specific question), and every unanswerable question
+is still declined. The held-out and Sakila sets were committed to git before any model
+was run on them, which the commit history shows.
 
 ### Rerun it
 
 ```bash
-python eval/run_eval.py                                              # model from .env
-python eval/run_eval.py --models openai/gpt-oss-120b openai/gpt-oss-20b qwen/qwen3.8-27b
-python eval/run_eval.py --ids h01 h02 --sleep 0                      # a few questions
+python eval/run_eval.py                                                  # dev set, model from .env
+python eval/run_eval.py --questions eval/heldout.jsonl --out eval/results/heldout
+T2S_DB_PATH=data/sakila.db python eval/run_eval.py --questions eval/sakila_questions.jsonl --out eval/results/sakila
+python eval/run_eval.py --models openai/gpt-oss-120b openai/gpt-oss-20b --ids h01 h02 --sleep 0
 ```
 
-A full run makes about 2 LLM calls per question per model. With Groq's free tier
-(200k tokens per model per day at the time of writing), plan roughly one full run per
-model per day. That is why `qwen/qwen3.8-27b`, which already serves as the helper model,
-is not in the table above; the command above includes it if you want to compare.
+Each run writes a per-question log (`<out>/<model>.jsonl`) with every SQL query and
+failure reason. The `summary.md` in that folder covers every model logged there, so
+models can be added to a comparison one run at a time. To add a model cheaply, pass
+`--reuse-selection <earlier log>.jsonl`. This replays the tables an earlier run used,
+instead of calling the helper model again, which halves the LLM calls and gives the new
+model exactly the same tables.
 
-The script writes a per-question log (`eval/results/<model>.jsonl`) with every SQL
-query and failure reason, plus `summary.md` and `summary.json`. The helper model stays
-fixed, so differences come from the SQL model alone.
+With Groq's free tier (200k tokens per model per day at the time of writing), a full
+dev-set run costs about 40% of one model's daily budget, and the free tier refills
+gradually over 24 hours.
 
 ---
 
@@ -519,7 +565,7 @@ text2sql-analyst/
 │   ├── config.py            # all settings, read from .env (T2S_* variables)
 │   ├── prompts.py           # every prompt in one place
 │   ├── pipeline.py          # Pipeline.ask(): the stages wired together
-│   ├── cli.py               # python -m text2sql {index,ask,tables}
+│   ├── cli.py               # python -m text2sql {index,ask,tables,models}
 │   ├── evaluation.py        # execution-accuracy matching, table recall
 │   ├── llm/                 # provider interface: OpenAI-compatible client, fake LLM, factory
 │   ├── db/                  # read-only connection, schema introspection
@@ -529,8 +575,8 @@ text2sql-analyst/
 │   ├── execution/           # sqlglot guardrails, read-only executor
 │   └── analysis/            # answer + analysis, column roles, chart picker
 ├── app/streamlit_app.py     # web UI
-├── scripts/download_chinook.py
-├── eval/                    # questions.jsonl, run_eval.py, results/
+├── scripts/download_sample_db.py   # Chinook or Sakila
+├── eval/                    # 3 question sets, run_eval.py, results/ (logs + summaries)
 └── tests/                   # pytest suite, runs offline (fake LLM + hashing embedder)
 ```
 
@@ -553,9 +599,12 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
 
 **Limitations**
 
-- **Small demo schema.** Chinook has 11 tables, so retrieval is easy. Table retrieval
-  matters much more with hundreds of tables, where you would raise `T2S_TOP_N_TABLES`
-  and write better descriptions.
+- **Small demo schemas.** Chinook has 11 tables and Sakila 15, so retrieval is easy.
+  Table retrieval matters much more with hundreds of tables, where you would raise
+  `T2S_TOP_N_TABLES` and write better descriptions.
+- **Famous databases flatter the models.** Both sample databases appear in the models'
+  training data, and one model was seen joining a table from memory. A private schema is
+  the real test.
 - **SQLite only.** The dialect is a setting, but the executor and timeout mechanism are
   SQLite-specific.
 - **No value linking.** If a user misspells a value ("ACDC" for "AC/DC"), the model
@@ -564,11 +613,11 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   for 2012?" are not resolved.
 - **The analysis can still be wrong.** It is grounded in the rows and in exact
   statistics, but it is generated text. The SQL and table are shown so you can verify.
-- **A small, self-written eval set.** 47 questions are enough to compare models, not to
-  claim benchmark numbers. The questions were written by the same person who built the
-  system, and two prompt fixes were made after looking at failures on this same set, so
-  the scores are optimistic. A held-out set or a public benchmark would be the honest
-  next step.
+- **Small, self-written eval sets.** 87 questions across three sets are enough to
+  compare models and catch regressions, not to claim benchmark numbers. The dev set was
+  used for tuning, so its scores are optimistic. The held-out and Sakila sets were never
+  used for tuning, but they were written by the same person who built the system. A
+  public benchmark would be the next step.
 - **Free-tier limits.** Hosted free tiers cap requests and tokens per day.
 
 **Possible improvements**
@@ -592,6 +641,8 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   follow its taxonomy.
 - **Chinook database** by Luis Rocha: <https://github.com/lerocha/chinook-database>
   (MIT License)
+- **Sakila database**, originally by Mike Hillyer (MySQL AB), SQLite port maintained by
+  jOOQ: <https://github.com/jOOQ/sakila> (BSD 2-Clause License)
 - **Models** (open weights, each under its own license):
   - [gpt-oss-120b and gpt-oss-20b](https://huggingface.co/openai/gpt-oss-120b) by
     OpenAI, open-weight (Apache 2.0)
