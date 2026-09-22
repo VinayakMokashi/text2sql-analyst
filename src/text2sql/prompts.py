@@ -213,3 +213,35 @@ in the answer; a single value usually has no insights, so return an empty list r
 than restating it. Skip generic caveats that apply to any query. If the result is
 empty, say that no matching data was found."""
     return system, user
+
+
+# ------------------------------------------------------------------------ follow-ups
+def followup_rewrite_prompt(
+    history: Sequence[tuple[str, str | None, str | None]], question: str
+) -> tuple[str, str]:
+    """Turn a follow-up ("and for 2012?") into a question that stands on its own.
+
+    ``history`` holds (question, sql, answer) for the most recent turns, oldest first.
+    The SQL is included because it pins down details the words leave open, such as
+    which table "those customers" came from.
+    """
+    system = (
+        "You rewrite follow-up questions about a database into standalone questions. "
+        "You never answer them. You reply with JSON only."
+    )
+    turns = "\n\n".join(
+        f"Q{i}: {q}\nSQL: {sql or '(none)'}\nAnswer: {answer or '(none)'}"
+        for i, (q, sql, answer) in enumerate(history, 1)
+    )
+    user = f"""Conversation so far (oldest first):
+{turns}
+
+New question: {question}
+
+If the new question depends on the conversation (for example "and for 2012?", "only in
+Brazil", "which of those spent the most?"), rewrite it as one standalone question that
+keeps every filter and grouping it inherits. If it is already standalone, return it
+unchanged.
+
+Reply with JSON only: {{"standalone": "the question"}}"""
+    return system, user

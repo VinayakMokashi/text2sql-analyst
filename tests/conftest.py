@@ -10,6 +10,15 @@ from pathlib import Path
 
 import pytest
 
+from text2sql.analysis import Analyst
+from text2sql.config import Settings
+from text2sql.db import read_schema
+from text2sql.generation import SQLGenerator
+from text2sql.indexing import build_index, open_collection
+from text2sql.llm import FakeLLM
+from text2sql.pipeline import Pipeline
+from text2sql.retrieval import TableRetriever, TableSelector
+
 SHOP_DDL = """
 CREATE TABLE customers (
     customer_id INTEGER PRIMARY KEY,
@@ -78,3 +87,43 @@ def shop_db(tmp_path: Path) -> Path:
     with sqlite3.connect(path) as conn:
         conn.executescript(SHOP_DDL + SHOP_ROWS)
     return path
+
+
+def helper_replies(selection_json: str):
+    """Helper model: answers table selection and analysis prompts differently."""
+
+    def reply(system: str, _user: str) -> str:
+        if "which tables are needed" in system:
+            return selection_json
+        return (
+            '{"answer": "Brazil leads with 375.0.", "insights": ["Two countries"], "caveats": []}'
+        )
+
+    return reply
+
+
+@pytest.fixture()
+def make_pipeline(shop_db, tmp_path, embedder):
+    tables = read_schema(shop_db)
+    index_dir = tmp_path / "index"
+    build_index(tables, index_dir, embedder, llm=None)
+
+    def factory(
+        sql_replies,
+        selection='{"tables": ["customers", "products"], "answerable": true}',
+        max_retries=2,
+    ):
+        settings = Settings(db_path=shop_db, max_retries=max_retries, llm_provider="fake")
+        helper = FakeLLM(helper_replies(selection))
+        sql_llm = FakeLLM(sql_replies)
+        pipe = Pipeline(
+            settings,
+            tables,
+            TableRetriever(open_collection(index_dir), embedder),
+            TableSelector(helper),
+            SQLGenerator(sql_llm),
+            Analyst(helper),
+        )
+        return pipe, sql_llm
+
+    return factory

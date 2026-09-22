@@ -1,6 +1,7 @@
 """The online question-answering pipeline, end to end.
 
-    question
+    question (a follow-up is first rewritten   conversation.FollowUpRewriter
+              into a standalone question)
       -> vector search (top-N tables)          retrieval.TableRetriever
       -> LLM table selection (top-K)           retrieval.TableSelector
       -> add FK bridge tables                  retrieval.add_join_tables
@@ -16,13 +17,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Literal
 
 from text2sql.analysis import Analysis, Analyst, ChartSpec, suggest_chart
 from text2sql.config import Settings, get_settings
+from text2sql.conversation import FollowUpRewriter, Turn
 from text2sql.db.schema import TableSchema, read_schema, schema_by_name
 from text2sql.execution import QueryError, QueryResult, execute_query
 from text2sql.generation import GeneratedSQL, SQLGenerator
@@ -64,10 +66,21 @@ class PipelineResult:
     analysis: Analysis | None = None
     chart: ChartSpec | None = None
     timings: dict[str, float] = field(default_factory=dict)
+    interpreted_as: str | None = None  # the standalone form of a follow-up question
 
     @property
     def ok(self) -> bool:
         return self.status == "ok"
+
+    @property
+    def asked(self) -> str:
+        """The question the pipeline actually answered."""
+        return self.interpreted_as or self.question
+
+    def as_turn(self) -> Turn:
+        """This exchange as context for the next follow-up question."""
+        answer = self.analysis.answer if self.analysis else self.message or None
+        return Turn(question=self.asked, sql=self.sql, answer=answer)
 
     @property
     def sql(self) -> str | None:
@@ -118,6 +131,7 @@ class Pipeline:
         selector: TableSelector,
         generator: SQLGenerator,
         analyst: Analyst,
+        rewriter: FollowUpRewriter | None = None,
     ) -> None:
         self.settings = settings
         self.schemas = schemas
@@ -126,6 +140,7 @@ class Pipeline:
         self.selector = selector
         self.generator = generator
         self.analyst = analyst
+        self.rewriter = rewriter
 
     @classmethod
     def from_settings(
@@ -160,10 +175,13 @@ class Pipeline:
             selector=TableSelector(helper),
             generator=SQLGenerator(sql_llm, s.sql_dialect, s.sample_rows),
             analyst=Analyst(helper, s.analysis_rows),
+            rewriter=FollowUpRewriter(helper),
         )
 
     # ------------------------------------------------------------------ public API
-    def ask(self, question: str, analyze: bool = True) -> PipelineResult:
+    def ask(
+        self, question: str, analyze: bool = True, history: Sequence[Turn] = ()
+    ) -> PipelineResult:
         """Answer one question. Never raises for model/SQL problems: failures come
         back as ``status="error"`` with a readable ``message``."""
         out = PipelineResult(question=question.strip())
@@ -171,7 +189,7 @@ class Pipeline:
             out.status, out.message = "error", "Please enter a question."
             return out
         try:
-            self._run(out, analyze)
+            self._run(out, analyze, history)
         except LLMError as exc:
             out.status, out.message = "error", f"The language model request failed: {exc}"
         except Exception as exc:  # noqa: BLE001 - an app should report, not crash
@@ -189,12 +207,20 @@ class Pipeline:
         finally:
             out.timings[stage] = out.timings.get(stage, 0.0) + time.perf_counter() - start
 
-    def _run(self, out: PipelineResult, analyze: bool) -> None:
+    def _run(self, out: PipelineResult, analyze: bool, history: Sequence[Turn]) -> None:
         s = self.settings
+
+        # 0. A follow-up ("and for 2012?") becomes a standalone question first.
+        if history and self.rewriter is not None:
+            with self._timed(out, "follow_up"):
+                standalone = self.rewriter.rewrite(history, out.question)
+            if standalone.strip() != out.question:
+                out.interpreted_as = standalone.strip()
+        question = out.asked
 
         # 1-2. Schema linking: recall-oriented vector search, then LLM precision.
         with self._timed(out, "retrieval"):
-            out.candidates = self.retriever.search(out.question, s.top_n_tables)
+            out.candidates = self.retriever.search(question, s.top_n_tables)
         if not any(c.name.lower() in self._by_name for c in out.candidates):
             out.status = "error"
             out.message = (
@@ -204,7 +230,7 @@ class Pipeline:
             return
         with self._timed(out, "table_selection"):
             out.selection = self.selector.select(
-                out.question, out.candidates, self._by_name, s.top_k_tables
+                question, out.candidates, self._by_name, s.top_k_tables
             )
         if not out.selection.answerable:
             out.status = "unanswerable"
@@ -216,7 +242,7 @@ class Pipeline:
 
         # 3-4. Generate SQL, run it, and let the model repair its own errors.
         with self._timed(out, "sql_generation"):
-            generated = self.generator.generate(out.question, tables)
+            generated = self.generator.generate(question, tables)
         for attempt_no in range(s.max_retries + 1):
             if self._declined(out, generated):
                 return
@@ -239,7 +265,7 @@ class Pipeline:
                     return
                 with self._timed(out, "sql_repair"):
                     generated = self.generator.repair(
-                        out.question, tables, generated.sql or "", str(exc)
+                        question, tables, generated.sql or "", str(exc)
                     )
 
         # 5. Explain the result and pick a chart.
@@ -248,7 +274,7 @@ class Pipeline:
         if analyze:
             with self._timed(out, "analysis"):
                 try:
-                    out.analysis = self.analyst.analyze(out.question, out.result)
+                    out.analysis = self.analyst.analyze(question, out.result)
                 except LLMError as exc:
                     # The data is still worth showing even if the explanation failed.
                     out.analysis = Analysis(

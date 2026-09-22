@@ -1,15 +1,6 @@
 """End-to-end pipeline tests on the shop database, with scripted (fake) LLMs."""
 
-import pytest
-
-from text2sql.analysis import Analyst
-from text2sql.config import Settings
-from text2sql.db import read_schema
-from text2sql.generation import SQLGenerator
-from text2sql.indexing import build_index, open_collection
-from text2sql.llm import FakeLLM, LLMError
-from text2sql.pipeline import Pipeline
-from text2sql.retrieval import TableRetriever, TableSelector
+from text2sql.llm import LLMError
 
 REVENUE_SQL = """```sql
 SELECT c.country, ROUND(SUM(p.price * oi.quantity), 2) AS revenue
@@ -18,46 +9,6 @@ JOIN order_items oi ON oi.order_id = o.order_id
 JOIN products p ON p.product_id = oi.product_id
 GROUP BY c.country ORDER BY revenue DESC
 ```"""
-
-
-def helper_replies(selection_json: str):
-    """Helper model: answers table selection and analysis prompts differently."""
-
-    def reply(system: str, _user: str) -> str:
-        if "which tables are needed" in system:
-            return selection_json
-        return (
-            '{"answer": "Brazil leads with 375.0.", "insights": ["Two countries"], "caveats": []}'
-        )
-
-    return reply
-
-
-@pytest.fixture()
-def make_pipeline(shop_db, tmp_path, embedder):
-    tables = read_schema(shop_db)
-    index_dir = tmp_path / "index"
-    build_index(tables, index_dir, embedder, llm=None)
-
-    def factory(
-        sql_replies,
-        selection='{"tables": ["customers", "products"], "answerable": true}',
-        max_retries=2,
-    ):
-        settings = Settings(db_path=shop_db, max_retries=max_retries, llm_provider="fake")
-        helper = FakeLLM(helper_replies(selection))
-        sql_llm = FakeLLM(sql_replies)
-        pipe = Pipeline(
-            settings,
-            tables,
-            TableRetriever(open_collection(index_dir), embedder),
-            TableSelector(helper),
-            SQLGenerator(sql_llm),
-            Analyst(helper),
-        )
-        return pipe, sql_llm
-
-    return factory
 
 
 def test_happy_path_returns_answer_table_chart_and_sql(make_pipeline):
