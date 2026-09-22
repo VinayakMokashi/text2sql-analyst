@@ -49,3 +49,13 @@ def test_tables_in_sql_ignores_ctes():
 def test_recall():
     assert recall({"a", "b"}, ["A", "c"]) == 0.5
     assert recall(set(), []) == 1.0
+
+
+def test_identical_results_with_many_identical_columns_match():
+    assert results_match([(None,) * 6], [(None,) * 6])
+    assert results_match([(0,) * 6, (0,) * 6], [(0,) * 6, (0,) * 6])
+
+
+def test_rounding_matches_sqlite_half_away_from_zero():
+    assert normalize_value(0.125) == 0.13
+    assert results_match([(0.13,)], [(0.125,)])

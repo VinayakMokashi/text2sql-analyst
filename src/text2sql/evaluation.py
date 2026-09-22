@@ -15,10 +15,10 @@ Row counts must match exactly, so an extra or missing row is always an error.
 
 from __future__ import annotations
 
-import itertools
 import re
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import sqlglot
@@ -26,6 +26,17 @@ from sqlglot import exp
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _MAX_MAPPINGS = 1000
+_CENT = Decimal("0.01")
+
+
+def _round2(value: float | str) -> float:
+    """Round to 2 decimals half away from zero, like SQLite's ROUND().
+
+    Python's round() rounds half to even and works on the binary float, so it would
+    turn 0.125 into 0.12 while SQLite's ROUND(0.125, 2) gives 0.13.
+    """
+    number = Decimal(value if isinstance(value, str) else repr(float(value)))
+    return float(number.quantize(_CENT, rounding=ROUND_HALF_UP)) + 0.0  # -0.0 -> 0.0
 
 
 def normalize_value(value: Any) -> Any:
@@ -34,10 +45,10 @@ def normalize_value(value: Any) -> Any:
     if isinstance(value, bool):
         return float(value)
     if isinstance(value, int | float):
-        return round(float(value), 2) + 0.0  # + 0.0 turns -0.0 into 0.0
+        return _round2(value)
     text = str(value).strip()
     if _NUMERIC_RE.match(text):
-        return round(float(text), 2) + 0.0
+        return _round2(text)
     return text
 
 
@@ -65,15 +76,38 @@ def results_match(gold: Sequence[Sequence[Any]], pred: Sequence[Sequence[Any]]) 
     if any(not c for c in candidates):
         return False
 
-    # Then check that the rows line up too (not just each column separately).
+    # Then check that the rows line up too (not just each column separately), trying
+    # each way of assigning distinct prediction columns to the gold columns.
     gold_rows = Counter(zip(*gold_cols, strict=True))
-    for mapping in itertools.islice(itertools.product(*candidates), _MAX_MAPPINGS):
-        if len(set(mapping)) != len(mapping):
-            continue
+    for n, mapping in enumerate(_injective_mappings(candidates)):
+        if n >= _MAX_MAPPINGS:
+            break
         projected = Counter(tuple(pred_cols[j][i] for j in mapping) for i in range(len(pred)))
         if projected == gold_rows:
             return True
     return False
+
+
+def _injective_mappings(candidates: list[list[int]]) -> Iterator[tuple[int, ...]]:
+    """Yield assignments of a distinct candidate to every position, depth first.
+
+    Generating only valid assignments matters: with several identical columns (say,
+    six all-NULL ones) most combinations reuse a column, and counting those against
+    the search budget could reject a prediction identical to the gold result.
+    """
+    chosen: list[int] = []
+
+    def extend(position: int) -> Iterator[tuple[int, ...]]:
+        if position == len(candidates):
+            yield tuple(chosen)
+            return
+        for j in candidates[position]:
+            if j not in chosen:
+                chosen.append(j)
+                yield from extend(position + 1)
+                chosen.pop()
+
+    return extend(0)
 
 
 def tables_in_sql(sql: str, dialect: str = "sqlite") -> set[str]:
