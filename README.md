@@ -185,7 +185,7 @@ the evaluation all call the same `Pipeline.ask()`.
 ## Setup
 
 You need **Python 3.11+** and **git**. The steps below take about 5 minutes. The only
-downloads are Python packages, the 1 MB sample database and a 130 MB embedding model;
+downloads are Python packages, the 1 MB sample database and a 65 MB embedding model;
 no large LLM weights.
 
 ### 1. Clone and install
@@ -236,7 +236,8 @@ python -m text2sql index
 
 This makes one short LLM call per table (11 calls for Chinook) to write the
 descriptions, then embeds them locally. The first run also downloads the embedding
-model. Use `--no-llm` to build the index with template descriptions and no API key.
+model. With `--no-llm`, tables that have no description yet get a template one, so no
+API key is needed; existing descriptions are always reused unless you pass `--refresh`.
 
 ### 5. Run it
 
@@ -309,7 +310,11 @@ python -m text2sql index        # builds data/index/<your db name>/
 streamlit run app/streamlit_app.py
 ```
 
-Each database gets its own index folder, so you can switch back and forth.
+Each database gets its own index folder, so you can switch back and forth. The index
+remembers which database file built it, and the app refuses to use it for a different
+file with the same name. After moving a database, re-index with
+`python -m text2sql index --force`. If you re-index while the Streamlit app is running,
+click **Reload settings and index** in its sidebar (this also picks up a changed `.env`).
 
 ### Try it on a second database: Sakila
 
@@ -516,11 +521,13 @@ was run on them, which the commit history shows.
 python eval/run_eval.py                                                  # dev set, model from .env
 python eval/run_eval.py --questions eval/heldout.jsonl --out eval/results/heldout
 T2S_DB_PATH=data/sakila.db python eval/run_eval.py --questions eval/sakila_questions.jsonl --out eval/results/sakila
-python eval/run_eval.py --models openai/gpt-oss-120b openai/gpt-oss-20b --ids h01 h02 --sleep 0
+python eval/run_eval.py --models openai/gpt-oss-120b --ids h01 h02 --sleep 0   # goes to results/partial/
 ```
 
-Each run writes a per-question log (`<out>/<model>.jsonl`) with every SQL query and
-failure reason. The `summary.md` in that folder covers every model logged there, so
+Each run writes a per-question log (`<out>/<model>.jsonl`, with `/` in the model name
+replaced by `_`, e.g. `openai_gpt-oss-120b.jsonl`) with every SQL query and failure
+reason. Runs limited with `--ids` or `--limit` go to `results/partial/`, so they never
+overwrite the full logs. The `summary.md` in that folder covers every model logged there, so
 models can be added to a comparison one run at a time. To add a model cheaply, pass
 `--reuse-selection <earlier log>.jsonl`. This replays the tables an earlier run used,
 instead of calling the helper model again, which halves the LLM calls and gives the new
@@ -541,12 +548,15 @@ The query runs against the database only after three independent layers:
    `ATTACH`, `PRAGMA` or `SET`. For example, a data-modifying CTE
    (`WITH d AS (DELETE ... RETURNING *) SELECT ...`) is caught. Functions that touch the
    file system or load native code (`load_extension`, `readfile`, ...) are rejected.
-2. **A read-only connection**: the database is opened with SQLite's `mode=ro` URI and
-   `PRAGMA query_only=ON`. Even if a query slipped past the parser, SQLite itself would
-   refuse to write.
+2. **SQLite itself refuses anything else**: the database is opened read-only (`mode=ro`
+   URI plus `PRAGMA query_only=ON`), and an *authorizer* inside SQLite allows only the
+   four operations a query needs (select, read, function call, recursive CTE). This
+   layer holds where sqlglot's grammar and SQLite's differ; for example, it refuses the
+   `pragma_table_info()` table function, which parses as an ordinary SELECT.
 3. **Resource limits**: at most `T2S_MAX_ROWS` rows are fetched (default 200; the SQL
-   is not rewritten), and a progress handler aborts any query that runs longer than
-   `T2S_QUERY_TIMEOUT_S` (default 10 s).
+   is not rewritten), no single value may exceed 1 MB (so an expression like
+   `hex(zeroblob(...))` cannot build a gigabyte string), and a progress handler aborts any
+   query that runs longer than `T2S_QUERY_TIMEOUT_S` (default 10 s).
 
 Rejected queries return a readable error. The pipeline feeds that error back to the
 model once or twice to fix, and then stops.
@@ -583,7 +593,7 @@ text2sql-analyst/
 ### Tests
 
 ```bash
-pytest          # about 100 tests, a few seconds, no network or API key needed
+pytest          # about 150 tests, a few seconds, no network or API key needed
 ruff check .
 ```
 

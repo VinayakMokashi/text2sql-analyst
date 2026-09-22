@@ -2,7 +2,7 @@
 
 We use ``fastembed`` (ONNX runtime) instead of ``sentence-transformers`` because it
 runs the same open-source models without installing PyTorch: about 70 MB of
-dependencies and a 130 MB model instead of multiple gigabytes.
+dependencies and a ~65 MB quantized model instead of multiple gigabytes.
 """
 
 from __future__ import annotations
