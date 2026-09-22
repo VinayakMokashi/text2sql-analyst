@@ -40,5 +40,5 @@ def test_connection_is_read_only(shop_db):
 
 
 def test_missing_database_has_helpful_error(tmp_path):
-    with pytest.raises(FileNotFoundError, match="download_chinook"):
+    with pytest.raises(FileNotFoundError, match="download_sample_db"):
         connect_readonly(tmp_path / "nope.db")

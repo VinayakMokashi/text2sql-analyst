@@ -16,7 +16,7 @@ def connect_readonly(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(
-            f"Database not found: {path}. Run `python scripts/download_chinook.py` first "
+            f"Database not found: {path}. Run `python scripts/download_sample_db.py` first "
             "or point T2S_DB_PATH at your own SQLite file."
         )
     # Path.as_uri() percent-encodes spaces and handles Windows drive letters.

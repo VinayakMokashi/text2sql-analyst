@@ -7,7 +7,7 @@ install:
 	$(PY) -m pip install -e ".[dev]"
 
 data:
-	$(PY) scripts/download_chinook.py
+	$(PY) scripts/download_sample_db.py chinook
 
 index:
 	$(PY) -m text2sql index
