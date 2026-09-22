@@ -188,7 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--db", type=Path, help="SQLite file (default: T2S_DB_PATH)")
     common.add_argument("--provider", help="LLM provider (default: T2S_LLM_PROVIDER)")
     common.add_argument("--sql-model", help="model for SQL generation")
-    common.add_argument("--helper-model", help="model for selection, follow-ups, analysis, descriptions")
+    common.add_argument(
+        "--helper-model", help="model for selection, follow-ups, analysis, descriptions"
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
     p_index = sub.add_parser("index", parents=[common], help="build the table index")
