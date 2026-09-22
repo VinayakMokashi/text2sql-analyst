@@ -75,3 +75,47 @@ def test_generator_and_repair_call_the_llm(tables):
     fixed = gen.repair("names?", tables, first.sql, "no such column: nme")
     assert (first.sql, fixed.sql) == ("SELECT nme FROM customers", "SELECT name FROM customers")
     assert "no such column: nme" in llm.calls[1][1]
+
+
+# ---------------------------------------------------------------- review fixes
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("```sqlite\nSELECT 1\n```", "SELECT 1"),
+        ("``` sql\nSELECT 1\n```", "SELECT 1"),
+        ("To select the top artists, run: SELECT a FROM t", "SELECT a FROM t"),
+        ("With the schema above, the answer is:\nSELECT b FROM t", "SELECT b FROM t"),
+        ("SELECT a FROM t\n\nThis query lists a.", "SELECT a FROM t"),
+        (
+            "Draft:\n```sql\nSELECT nme FROM t\n```\nFixed:\n```sql\nSELECT name FROM t\n```",
+            "SELECT name FROM t",
+        ),
+        (
+            "```sql\nWITH x AS (\n  SELECT 1\n)\nSELECT * FROM x\n```",
+            "WITH x AS (\n  SELECT 1\n)\nSELECT * FROM x",
+        ),
+    ],
+)
+def test_extract_sql_from_messier_replies(reply, expected):
+    assert extract_sql(reply) == expected
+
+
+@pytest.mark.parametrize(
+    "reply, reason",
+    [
+        ("```sql\nCANNOT_ANSWER: no salary column\n```", "no salary column"),
+        ("I checked the schema.\nCANNOT_ANSWER: there are no ratings", "there are no ratings"),
+        ("**CANNOT_ANSWER**: nope", "nope"),
+        ("The database doesn't store weather data.", "The database doesn't store weather data."),
+    ],
+)
+def test_refusals_in_any_shape(reply, reason):
+    result = parse_reply(reply)
+    assert result.sql is None
+    assert result.cannot_answer == reason
+
+
+def test_a_non_select_statement_is_sql_to_reject_not_a_refusal():
+    result = parse_reply("DELETE FROM customers")
+    assert result.cannot_answer is None
+    assert result.sql == "DELETE FROM customers"
