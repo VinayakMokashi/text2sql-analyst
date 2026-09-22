@@ -137,3 +137,41 @@ def test_llm_failure_becomes_readable_error(make_pipeline):
 def test_empty_question(make_pipeline):
     pipe, _ = make_pipeline(["SELECT 1"])
     assert pipe.ask("   ").status == "error"
+
+
+# ---------------------------------------------------------------- review fixes
+def test_unbalanced_quote_in_sql_is_repaired_not_crashed(make_pipeline):
+    pipe, _ = make_pipeline(
+        [
+            "SELECT name FROM customers WHERE name = 'Guns N' Roses'",
+            "SELECT name FROM customers WHERE name = 'Guns N'' Roses'",
+        ]
+    )
+    out = pipe.ask("Find the band")
+    assert out.ok, out.message
+    assert "could not be parsed" in out.attempts[0].error
+
+
+def test_duplicate_column_names_do_not_break_charts(make_pipeline):
+    pipe, _ = make_pipeline(
+        [
+            "SELECT c.name, p.title AS name, oi.quantity FROM customers c JOIN orders o "
+            "ON o.customer_id = c.customer_id JOIN order_items oi ON oi.order_id = o.order_id "
+            "JOIN products p ON p.product_id = oi.product_id"
+        ]
+    )
+    out = pipe.ask("Who bought what?")
+    assert out.ok, out.message
+    assert out.result.columns == ["name", "name_2", "quantity"]
+
+
+def test_unexpected_errors_are_reported_not_raised(make_pipeline):
+    pipe, _ = make_pipeline(["SELECT 1"])
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("boom")
+
+    pipe.selector.select = broken
+    out = pipe.ask("anything")
+    assert out.status == "error"
+    assert "Unexpected error (KeyError)" in out.message

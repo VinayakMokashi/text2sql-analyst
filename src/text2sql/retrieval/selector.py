@@ -62,7 +62,7 @@ class TableSelector:
         if data is None:
             return top_k_fallback("Could not parse table selection; using top matches.")
 
-        reason = str(data.get("reason", ""))
+        reason = str(data.get("reason") or "")  # JSON null must not become "None"
         if data.get("answerable") is False:
             return TableSelection([], answerable=False, reason=reason)
 

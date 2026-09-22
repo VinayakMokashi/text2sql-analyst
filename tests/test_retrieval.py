@@ -127,3 +127,68 @@ def test_join_expansion_adds_bridge_table(shop_tables):
 def test_join_expansion_keeps_directly_connected_tables(shop_tables):
     assert add_join_tables(["orders", "customers"], shop_tables) == ["orders", "customers"]
     assert add_join_tables(["products"], shop_tables) == ["products"]
+
+
+# ---------------------------------------------------------------- review fixes
+def test_join_expansion_ignores_foreign_keys_to_missing_tables(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "a.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));"
+            "CREATE TABLE reviews (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));"
+        )
+    tables = read_schema(db)
+    assert add_join_tables(["orders", "reviews"], tables) == ["orders", "reviews"]
+
+
+def test_reindexing_updates_the_collection_in_place(shop_index, shop_tables, embedder):
+    before = open_collection(shop_index).id
+    build_index(shop_tables[:3], shop_index, embedder, llm=None)
+    collection = open_collection(shop_index)
+    assert collection.id == before  # a running app keeps a valid handle
+    assert collection.count() == 3  # the dropped table's vector is gone
+
+
+def test_index_refuses_an_empty_database(tmp_path, embedder):
+    with pytest.raises(ValueError, match="no tables"):
+        build_index([], tmp_path / "idx", embedder, llm=None)
+
+
+def test_hand_edited_descriptions_with_a_byte_order_mark_load(tmp_path):
+    (tmp_path / "table_docs.json").write_text('{"orders": "edited"}', encoding="utf-8-sig")
+    assert load_descriptions(tmp_path) == {"orders": "edited"}
+
+
+def test_index_folder_for_another_database_is_protected(tmp_path, shop_db, shop_tables, embedder):
+    from text2sql.config import Settings
+    from text2sql.pipeline import check_index
+
+    settings = Settings(db_path=shop_db, index_dir=tmp_path / "indexes", llm_provider="fake")
+    build_index(shop_tables, settings.db_index_dir, embedder, llm=None, db_path=shop_db)
+    check_index(settings)  # the same database: fine
+
+    other = tmp_path / "copy" / shop_db.name  # same file name, different file
+    with pytest.raises(ValueError, match="holds the index of"):
+        build_index(shop_tables, settings.db_index_dir, embedder, llm=None, db_path=other)
+    with pytest.raises(ValueError, match="was built for"):
+        check_index(Settings(db_path=other, index_dir=tmp_path / "indexes", llm_provider="fake"))
+    # An explicit override is allowed (e.g. after moving the file).
+    build_index(shop_tables, settings.db_index_dir, embedder, llm=None, db_path=other, force=True)
+
+
+def test_description_progress_survives_a_failure(tmp_path, shop_tables, embedder):
+    from text2sql.llm import LLMError
+
+    replies = iter(["first description", "second description"])
+
+    def flaky(_system, _user):
+        try:
+            return next(replies)
+        except StopIteration:
+            raise LLMError("daily limit") from None
+
+    with pytest.raises(LLMError):
+        build_index(shop_tables, tmp_path / "idx", embedder, FakeLLM(flaky))
+    assert len(load_descriptions(tmp_path / "idx")) == 2

@@ -7,23 +7,23 @@ import re
 from typing import Any
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_DECODER = json.JSONDecoder()
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:
     """Extract the first JSON object from an LLM reply.
 
-    Models often wrap JSON in code fences or add a sentence before it, so we look
-    inside fences first and then fall back to the outermost ``{...}`` span.
+    Models often wrap JSON in code fences or add sentences around it (which may contain
+    braces of their own), so we look inside fences first, then try to decode an object
+    at each "{" in turn and return the first one that parses.
     """
-    candidates = [m.group(1) for m in _FENCE_RE.finditer(text)] + [text]
-    for chunk in candidates:
-        start, end = chunk.find("{"), chunk.rfind("}")
-        if start == -1 or end <= start:
-            continue
-        try:
-            value = json.loads(chunk[start : end + 1])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
+    chunks = [m.group(1) for m in _FENCE_RE.finditer(text)] + [text]
+    for chunk in chunks:
+        for start in (m.start() for m in re.finditer(r"\{", chunk)):
+            try:
+                value, _ = _DECODER.raw_decode(chunk, start)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
     return None

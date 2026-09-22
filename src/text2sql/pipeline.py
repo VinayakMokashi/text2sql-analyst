@@ -14,6 +14,7 @@ The CLI, the Streamlit app and the evaluation script all call ``Pipeline.ask``.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,7 +26,7 @@ from text2sql.config import Settings, get_settings
 from text2sql.db.schema import TableSchema, read_schema, schema_by_name
 from text2sql.execution import QueryError, QueryResult, execute_query
 from text2sql.generation import GeneratedSQL, SQLGenerator
-from text2sql.indexing import FastEmbedEmbedder, open_collection
+from text2sql.indexing import FastEmbedEmbedder, load_index_info, open_collection
 from text2sql.indexing.embeddings import Embedder
 from text2sql.llm import LLMError, create_llm
 from text2sql.retrieval import (
@@ -35,6 +36,8 @@ from text2sql.retrieval import (
     TableSelector,
     add_join_tables,
 )
+
+log = logging.getLogger(__name__)
 
 Status = Literal["ok", "unanswerable", "error"]
 
@@ -80,6 +83,32 @@ def load_embedder(settings: Settings) -> FastEmbedEmbedder:
     return FastEmbedEmbedder(settings.embedding_model, cache_dir=settings.model_cache_dir)
 
 
+def check_index(settings: Settings) -> None:
+    """Refuse to use an index built for another database file or embedding model.
+
+    Index folders are named after the database file, so ``a/chinook.db`` and
+    ``b/chinook.db`` would share one; and vectors from a different embedding model
+    are not comparable with the query's. Both would give silently wrong retrieval.
+    """
+    info = load_index_info(settings.db_index_dir)
+    if not info:
+        return  # an index built before this check existed; nothing to compare
+    built_for = info.get("db_path")
+    if built_for and built_for != str(settings.db_path.resolve()):
+        raise ValueError(
+            f"The index in {settings.db_index_dir} was built for {built_for}, not "
+            f"{settings.db_path.resolve()}. Set T2S_INDEX_DIR to a different folder, "
+            "or run `python -m text2sql index` to rebuild it for this database."
+        )
+    model = info.get("embedding_model")
+    if model and model != settings.embedding_model:
+        raise ValueError(
+            f"The index was built with the embedding model {model}, but "
+            f"T2S_EMBEDDING_MODEL is {settings.embedding_model}. Run "
+            "`python -m text2sql index` to rebuild it."
+        )
+
+
 class Pipeline:
     def __init__(
         self,
@@ -109,6 +138,7 @@ class Pipeline:
     ) -> Pipeline:
         """Wire up real components. Model names can be overridden (used by the eval)."""
         s = settings or get_settings()
+        check_index(s)
         helper = create_llm(s, "helper", helper_model)
         sql_llm = create_llm(s, "sql", sql_model)
         embedder = embedder or load_embedder(s)
@@ -133,6 +163,10 @@ class Pipeline:
             self._run(out, analyze)
         except LLMError as exc:
             out.status, out.message = "error", f"The language model request failed: {exc}"
+        except Exception as exc:  # noqa: BLE001 - an app should report, not crash
+            # Anything unexpected is a bug; the log keeps the traceback for fixing it.
+            log.exception("Unexpected error while answering %r", out.question)
+            out.status, out.message = "error", f"Unexpected error ({type(exc).__name__}): {exc}"
         return out
 
     # ------------------------------------------------------------------- internals
@@ -150,6 +184,13 @@ class Pipeline:
         # 1-2. Schema linking: recall-oriented vector search, then LLM precision.
         with self._timed(out, "retrieval"):
             out.candidates = self.retriever.search(out.question, s.top_n_tables)
+        if not any(c.name.lower() in self._by_name for c in out.candidates):
+            out.status = "error"
+            out.message = (
+                "The table index does not match this database (none of the indexed tables "
+                "exist in it). Run `python -m text2sql index` for this database."
+            )
+            return
         with self._timed(out, "table_selection"):
             out.selection = self.selector.select(
                 out.question, out.candidates, self._by_name, s.top_k_tables

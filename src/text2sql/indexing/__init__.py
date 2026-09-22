@@ -2,7 +2,13 @@
 
 from text2sql.indexing.describe import describe_table, fallback_description, index_document
 from text2sql.indexing.embeddings import Embedder, FastEmbedEmbedder
-from text2sql.indexing.indexer import IndexedTable, build_index, load_descriptions, open_collection
+from text2sql.indexing.indexer import (
+    IndexedTable,
+    build_index,
+    load_descriptions,
+    load_index_info,
+    open_collection,
+)
 
 __all__ = [
     "Embedder",
@@ -13,5 +19,6 @@ __all__ = [
     "fallback_description",
     "index_document",
     "load_descriptions",
+    "load_index_info",
     "open_collection",
 ]

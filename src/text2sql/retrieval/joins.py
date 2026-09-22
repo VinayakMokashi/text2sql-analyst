@@ -15,15 +15,20 @@ from text2sql.db.schema import TableSchema
 
 
 def fk_graph(tables: Iterable[TableSchema]) -> dict[str, set[str]]:
-    """Undirected adjacency map (lower-cased names) built from foreign keys."""
-    graph: dict[str, set[str]] = {}
+    """Undirected adjacency map (lower-cased names) built from foreign keys.
+
+    SQLite accepts a foreign key to a table that does not exist (for example after a
+    lookup table was dropped). Such edges are skipped, so a join path can never route
+    through a table the SQL model would not be given.
+    """
+    tables = list(tables)
+    graph: dict[str, set[str]] = {t.name.lower(): set() for t in tables}
     for t in tables:
-        graph.setdefault(t.name.lower(), set())
         for fk in t.foreign_keys:
             a, b = t.name.lower(), fk.ref_table.lower()
-            graph.setdefault(b, set())
-            graph[a].add(b)
-            graph[b].add(a)
+            if b in graph and a != b:  # a self-reference adds no bridge table
+                graph[a].add(b)
+                graph[b].add(a)
     return graph
 
 
