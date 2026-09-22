@@ -138,14 +138,25 @@ class Pipeline:
     ) -> Pipeline:
         """Wire up real components. Model names can be overridden (used by the eval)."""
         s = settings or get_settings()
+        schemas = read_schema(s.db_path, s.sample_rows)
         check_index(s)
+        not_indexed = RuntimeError(
+            f"No table index for {s.db_path.name} yet. Run `python -m text2sql index` first."
+        )
+        if not (s.db_index_dir / "chroma").exists():
+            raise not_indexed
+        retriever = TableRetriever(
+            open_collection(s.db_index_dir), embedder or load_embedder(s),
+            reopen=lambda: open_collection(s.db_index_dir),
+        )  # fmt: skip
+        if retriever.count() == 0:
+            raise not_indexed
         helper = create_llm(s, "helper", helper_model)
         sql_llm = create_llm(s, "sql", sql_model)
-        embedder = embedder or load_embedder(s)
         return cls(
             settings=s,
-            schemas=read_schema(s.db_path, s.sample_rows),
-            retriever=TableRetriever(open_collection(s.db_index_dir), embedder),
+            schemas=schemas,
+            retriever=retriever,
             selector=TableSelector(helper),
             generator=SQLGenerator(sql_llm, s.sql_dialect, s.sample_rows),
             analyst=Analyst(helper, s.analysis_rows),
