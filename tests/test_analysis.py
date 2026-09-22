@@ -148,6 +148,17 @@ def test_trend_percentage_uses_the_size_of_the_start_value():
     assert "overall change +100.00, +50.0%" in summary_stats(df)
 
 
+def test_statistics_of_a_cut_off_result_say_they_cover_only_the_rows_returned():
+    # Seen live: 200 of 204 artists came back, and "343 albums in the catalogue" was
+    # the sum of the rows returned (the catalogue has 347).
+    llm = FakeLLM(['{"answer": "Rock."}'])
+    Analyst(llm).analyze("q", make_result(GENRES.columns, GENRES.rows, True))
+    assert "over the 3 rows returned only" in llm.calls[0][1]
+    llm = FakeLLM(['{"answer": "Rock."}'])
+    Analyst(llm).analyze("q", GENRES)
+    assert "rows returned only" not in llm.calls[0][1]
+
+
 def test_truncation_caveat_always_comes_first():
     llm = FakeLLM(['{"answer": "Rock.", "caveats": ["a", "b", "c row"]}'])
     analysis = Analyst(llm).analyze("q", make_result(GENRES.columns, GENRES.rows, True))

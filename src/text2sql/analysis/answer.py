@@ -121,13 +121,17 @@ class Analyst:
                 caveats=["The query ran successfully but returned no rows."],
             )
 
+        stats = summary_stats(df)
+        if result.truncated:
+            # Otherwise the sum of the rows shown reads as the total of everything.
+            stats = f"(over the {result.row_count} rows returned only; there are more)\n{stats}"
         system, user = analysis_prompt(
             question,
             result.sql,
             result.row_count,
             result.truncated,
             result_table_text(df, self._max_rows),
-            summary_stats(df),
+            stats,
         )
         resp = self._llm.complete(system, user, temperature=0.2, max_tokens=1200)
         # Added by the application, and always first, so it can never be crowded out.
