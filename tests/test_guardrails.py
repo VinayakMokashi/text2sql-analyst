@@ -83,3 +83,32 @@ def test_long_running_query_times_out(shop_db):
     )
     with pytest.raises(QueryTimeoutError, match="longer than"):
         execute_query(shop_db, endless, timeout_s=0.2)
+
+
+# ---------------------------------------------------------------- review fixes
+def test_unbalanced_quotes_are_rejected_not_crashed():
+    # sqlglot raises TokenError (not ParseError) here, e.g. for 'Guns N' Roses'.
+    with pytest.raises(UnsafeSQLError, match="could not be parsed"):
+        validate_sql("SELECT name FROM customers WHERE name = 'Guns N' Roses'")
+
+
+def test_authorizer_refuses_what_the_parser_lets_through(shop_db):
+    # pragma_table_info() is a SELECT to sqlglot, but not a data read to SQLite.
+    with pytest.raises(SQLExecutionError, match="not authorized"):
+        execute_query(shop_db, "SELECT * FROM pragma_table_info('customers')")
+
+
+def test_one_huge_value_cannot_be_built(shop_db):
+    with pytest.raises(SQLExecutionError, match="too big"):
+        execute_query(shop_db, "SELECT hex(zeroblob(40000000))")
+
+
+def test_duplicate_column_names_are_made_unique(shop_db):
+    result = execute_query(
+        shop_db,
+        "SELECT c.name, p.title AS name FROM customers c JOIN orders o ON o.customer_id = "
+        "c.customer_id JOIN order_items i ON i.order_id = o.order_id JOIN products p "
+        "ON p.product_id = i.product_id",
+    )
+    assert result.columns == ["name", "name_2"]
+    assert list(result.to_dataframe().columns) == ["name", "name_2"]

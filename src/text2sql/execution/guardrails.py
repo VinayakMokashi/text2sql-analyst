@@ -1,9 +1,10 @@
 """Static SQL guardrails: allow exactly one read-only query, nothing else.
 
-This is defence in depth. The database connection is already read-only, but checking
-the parsed query first gives the LLM a clear error message to repair, and blocks
-things a read-only connection would still allow (``ATTACH``, ``PRAGMA``, extension
-loading, multiple statements).
+This is the first of three layers. The parsed-query check gives the LLM a clear error
+message to repair and rejects statements a read-only connection would still accept
+(``ATTACH``, ``PRAGMA``, multiple statements). Because sqlglot's grammar is not
+SQLite's, the executor adds an allow-list authorizer inside SQLite itself, and the
+connection is read-only.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import SqlglotError
 
 # sqlglot logs a warning whenever it falls back to a generic Command node; we reject
 # those anyway, so the warning is just noise.
@@ -50,7 +51,7 @@ def validate_sql(sql: str | None, dialect: str = "sqlite") -> str:
         raise UnsafeSQLError("The query is empty.")
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
-    except ParseError as exc:
+    except SqlglotError as exc:  # ParseError, and TokenError for e.g. 'Guns N' Roses'
         first_line = str(exc).splitlines()[0]
         raise UnsafeSQLError(f"The SQL could not be parsed: {first_line}") from exc
 

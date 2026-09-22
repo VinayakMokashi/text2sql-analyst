@@ -1,4 +1,4 @@
-"""Run validated SQL against the database with a row cap and a timeout."""
+"""Run validated SQL against the database with a row cap, a size cap and a timeout."""
 
 from __future__ import annotations
 
@@ -11,7 +11,22 @@ from typing import Any
 import pandas as pd
 
 from text2sql.db.connection import connect_readonly
-from text2sql.execution.guardrails import QueryError, validate_sql
+from text2sql.execution.guardrails import DENIED_FUNCTIONS, QueryError, validate_sql
+
+# Largest single string or blob a query may produce. Without it, one expression such as
+# hex(zeroblob(...)) could build a value of up to 1 GB, which neither the row cap nor
+# the timeout (checked between VM steps) can stop.
+MAX_VALUE_BYTES = 1_000_000
+
+# What a read-only query legitimately needs SQLite to do; everything else is refused
+# by the authorizer. This is the layer that holds even where sqlglot's grammar and
+# SQLite's disagree (for example, it refuses pragma_table_info()).
+_ALLOWED_ACTIONS = {
+    sqlite3.SQLITE_SELECT,
+    sqlite3.SQLITE_READ,
+    sqlite3.SQLITE_FUNCTION,
+    sqlite3.SQLITE_RECURSIVE,
+}
 
 
 class SQLExecutionError(QueryError):
@@ -38,6 +53,32 @@ class QueryResult:
         return pd.DataFrame(self.rows, columns=self.columns)
 
 
+def _authorize(action: int, arg1: str | None, *_: object) -> int:
+    if action not in _ALLOWED_ACTIONS:
+        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_FUNCTION and (arg1 or "").lower() in DENIED_FUNCTIONS:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def unique_column_names(names: list[str]) -> list[str]:
+    """Make result column names unique (``Name``, ``Name_2``, ...).
+
+    ``SELECT t.Name, g.Name`` returns two columns called ``Name``; pandas and the
+    chart and statistics code need every column name to be distinct.
+    """
+    seen: set[str] = set()
+    result = []
+    for name in names:
+        candidate, n = name, 1
+        while candidate in seen:
+            n += 1
+            candidate = f"{name}_{n}"
+        seen.add(candidate)
+        result.append(candidate)
+    return result
+
+
 def execute_query(
     db_path: str | Path,
     sql: str,
@@ -56,6 +97,8 @@ def execute_query(
     """
     safe_sql = validate_sql(sql, dialect)
     conn = connect_readonly(db_path)
+    conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+    conn.set_authorizer(_authorize)
     deadline = time.monotonic() + timeout_s
     conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
 
@@ -63,14 +106,14 @@ def execute_query(
     try:
         cursor = conn.execute(safe_sql)
         rows = cursor.fetchmany(max_rows + 1)
-        columns = [d[0] for d in cursor.description or []]
+        columns = unique_column_names([d[0] for d in cursor.description or []])
     except sqlite3.OperationalError as exc:
         if "interrupted" in str(exc).lower():
             raise QueryTimeoutError(
                 f"The query took longer than {timeout_s:g}s and was stopped."
             ) from exc
         raise SQLExecutionError(str(exc)) from exc
-    except sqlite3.Error as exc:
+    except sqlite3.Error as exc:  # DataError for oversized values, DatabaseError, ...
         raise SQLExecutionError(str(exc)) from exc
     finally:
         conn.close()
