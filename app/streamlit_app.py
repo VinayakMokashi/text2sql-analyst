@@ -20,11 +20,32 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+
+def _source_signature() -> tuple[float, int]:
+    """When text2sql's source files last changed, and how many there are."""
+    files = list((_SRC / "text2sql").rglob("*.py")) if _SRC.is_dir() else []
+    return max((f.stat().st_mtime for f in files), default=0.0), len(files)
+
+
+# Community Cloud applies a new commit to the running app without restarting it, and
+# Streamlit reloads changed modules only from this folder. So when text2sql's source has
+# changed since it was imported, forget its modules and everything cached from them, and
+# import the new code.
+_SIGNATURE = _source_signature()
+_loaded = sys.modules.get("text2sql")
+if _loaded is not None and getattr(_loaded, "source_signature", None) != _SIGNATURE:
+    for _name in [n for n in sys.modules if n == "text2sql" or n.startswith("text2sql.")]:
+        del sys.modules[_name]
+    st.cache_resource.clear()
+
+import text2sql
 from text2sql.analysis import ChartSpec
 from text2sql.config import get_settings
 from text2sql.demo import ensure_sample_ready, shared_budget
 from text2sql.indexing import FastEmbedEmbedder
 from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
+
+text2sql.source_signature = _SIGNATURE
 
 REPO_URL = "https://github.com/VinayakMokashi/text2sql-analyst"
 # The bundled sample databases a visitor can switch between. The app downloads and
@@ -59,6 +80,9 @@ EXAMPLES = {
 SERIES_COLOR = {"light": "#2a78d6", "dark": "#3987e5"}
 
 st.set_page_config(page_title="Text2SQL Analyst", page_icon=":bar_chart:", layout="centered")
+if st.session_state.get("code_signature") != _SIGNATURE:
+    st.session_state.history = []  # answers from before a code update use the old classes
+    st.session_state.code_signature = _SIGNATURE
 
 
 @st.cache_resource(show_spinner=False)
