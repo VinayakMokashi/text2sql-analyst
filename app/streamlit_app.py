@@ -65,40 +65,56 @@ def theme() -> str:
 
 
 # -------------------------------------------------------------------------- charts
+def format_number(value: object) -> str:
+    """Readable number for the metric tile: 1,234.5, 0.004 or 42."""
+    if isinstance(value, float):
+        if value != 0 and abs(value) < 1:
+            return f"{value:.3g}"  # 0.004 stays 0.004, not "0"
+        return f"{value:,.2f}".rstrip("0").rstrip(".")
+    try:
+        return f"{value:,}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
     if spec.kind == "metric":
-        value = df[spec.y].iloc[0]
-        text = f"{value:,.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else f"{value:,}"
-        st.metric(label=spec.y.replace("_", " "), value=text)
+        st.metric(label=spec.y.replace("_", " "), value=format_number(df[spec.y].iloc[0]))
         return
 
+    # Altair reads field names as shorthand ("count(*)" looks like an aggregate, "a.b"
+    # like a nested field), so plot copies under fixed names and show the originals as
+    # titles.
+    data = pd.DataFrame({"label": df[spec.x], "value": df[spec.y]})
     color = SERIES_COLOR[theme()]
-    tooltip = [alt.Tooltip(spec.x), alt.Tooltip(spec.y, format=",.2f")]
+    tooltip = [
+        alt.Tooltip("label", title=spec.x),
+        alt.Tooltip("value", title=spec.y, format=",.2f"),
+    ]
     if spec.kind == "bar":
         # Horizontal bars sorted by value: long category names stay readable and the
         # ranking is visible at a glance.
         chart = (
-            alt.Chart(df)
+            alt.Chart(data)
             .mark_bar(color=color, cornerRadiusEnd=4, height={"band": 0.7})
             .encode(
-                x=alt.X(spec.y, type="quantitative", title=spec.y, axis=alt.Axis(tickCount=5)),
-                y=alt.Y(spec.x, type="nominal", sort="-x", title=None),
+                x=alt.X("value", type="quantitative", title=spec.y, axis=alt.Axis(tickCount=5)),
+                y=alt.Y("label", type="nominal", sort="-x", title=None),
                 tooltip=tooltip,
             )
             # The height includes the axes (Streamlit fits the chart to it), so give
             # each bar ~32px plus room for the x-axis and its title.
-            .properties(height=70 + 32 * len(df))
+            .properties(height=70 + 32 * len(data))
         )
     else:  # line
-        data = df.sort_values(spec.x)
         chart = (
-            alt.Chart(data)
+            alt.Chart(data.sort_values("label"))
             .mark_line(color=color, strokeWidth=2, point=alt.OverlayMarkDef(size=64, color=color))
             .encode(
-                x=alt.X(spec.x, type="ordinal", title=None, axis=alt.Axis(labelAngle=0)),
+                x=alt.X("label", type="ordinal", title=None, axis=alt.Axis(labelAngle=0)),
                 # Unlike bars, a line needs no zero baseline; starting the axis near the
                 # data keeps small changes over time visible.
-                y=alt.Y(spec.y, type="quantitative", title=spec.y, scale=alt.Scale(zero=False)),
+                y=alt.Y("value", type="quantitative", title=spec.y, scale=alt.Scale(zero=False)),
                 tooltip=tooltip,
             )
             .properties(height=280)
@@ -164,7 +180,19 @@ def render_details(out: PipelineResult) -> None:
 
 
 # ---------------------------------------------------------------------------- page
-settings = get_settings()
+def reload_everything() -> None:
+    """Pick up a changed .env or a rebuilt index without restarting the server."""
+    get_settings.cache_clear()
+    get_pipeline.clear()
+
+
+# Settings are read inside the try: an invalid T2S_* value should show the setup box
+# below, not a traceback.
+try:
+    settings = get_settings()
+    setup_error: Exception | None = None
+except Exception as exc:  # noqa: BLE001
+    settings, setup_error = None, exc
 
 with st.sidebar:
     st.header("Text2SQL Analyst")
@@ -172,43 +200,51 @@ with st.sidebar:
         "Ask a question about the database in plain English. The app finds the relevant "
         "tables, writes SQL, runs it read-only and explains the result."
     )
-    examples = EXAMPLES.get(settings.db_path.stem.lower(), [])
+    examples = EXAMPLES.get(settings.db_path.stem.lower(), []) if settings else []
     if examples:
         st.subheader("Try an example")
     for example in examples:
         if st.button(example, width="stretch"):
             st.session_state.pending = example
-    st.subheader("Configuration")
-    st.markdown(
-        f"- Database: `{settings.db_path.name}`\n"
-        f"- Provider: `{settings.llm_provider}`\n"
-        f"- SQL model: `{settings.sql_model}`\n"
-        f"- Helper model: `{settings.helper_model}`\n"
-        f"- Embeddings: `{settings.embedding_model}`"
-    )
+    if settings:
+        st.subheader("Configuration")
+        st.markdown(
+            f"- Database: `{settings.db_path.name}`\n"
+            f"- Provider: `{settings.llm_provider}`\n"
+            f"- SQL model: `{settings.sql_model}`\n"
+            f"- Helper model: `{settings.helper_model}`\n"
+            f"- Embeddings: `{settings.embedding_model}`"
+        )
     if st.button("Clear conversation", width="stretch"):
         st.session_state.history = []
+    if st.button("Reload settings and index", width="stretch"):
+        reload_everything()
+        st.rerun()
 
 st.title("Ask your data")
-st.caption(
-    f"Connected to **{settings.db_path.name}**. Answers come from the data, not from "
-    "the model's memory; open *SQL and how it was produced* to check the work."
-)
+if settings:
+    st.caption(
+        f"Connected to **{settings.db_path.name}**. Answers come from the data, not from "
+        "the model's memory; open *SQL and how it was produced* to check the work."
+    )
 
 try:
+    if setup_error is not None:
+        raise setup_error
     pipeline = get_pipeline()
 except Exception as exc:  # noqa: BLE001 - show setup problems in the UI, not a traceback
-    st.error(f"**Setup problem:** {exc}")
+    st.error(f"**Setup problem:** {md(str(exc))}")
     st.info(
         "See the README's *Setup* section: download the database, add your API key to "
-        "`.env`, and run `python -m text2sql index`."
+        "`.env`, and run `python -m text2sql index`. Then click *Reload settings and "
+        "index* in the sidebar."
     )
     st.stop()
 
 history: list[PipelineResult] = st.session_state.setdefault("history", [])
 for past in history:
     with st.chat_message("user"):
-        st.write(past.question)
+        st.markdown(md(past.question))
     with st.chat_message("assistant"):
         render_result(past)
 
@@ -216,7 +252,7 @@ question = st.chat_input("e.g. Which country has the most customers?")
 question = question or st.session_state.pop("pending", None)
 if question:
     with st.chat_message("user"):
-        st.write(question)
+        st.markdown(md(question))
     with st.chat_message("assistant"):
         with st.spinner("Finding tables, writing SQL, analysing..."):
             result = pipeline.ask(question)
