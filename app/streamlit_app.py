@@ -14,15 +14,27 @@ from text2sql.analysis import ChartSpec
 from text2sql.config import get_settings
 from text2sql.pipeline import Pipeline, PipelineResult
 
-EXAMPLES = [
-    "Which 5 genres generate the most revenue?",
-    "How did total sales change from year to year?",
-    "Who are the top 10 customers by total spending, and where are they from?",
-    "Which sales support agent is responsible for the most revenue?",
-    "Which artists have the most albums in the catalogue?",
-    "What is the average invoice total per country?",
-    "What is the salary of each employee?",
-]
+# Sidebar examples for the bundled sample databases (keyed by file name); any other
+# database simply shows no examples.
+EXAMPLES = {
+    "chinook": [
+        "Which 5 genres generate the most revenue?",
+        "How did total sales change from year to year?",
+        "Who are the top 10 customers by total spending, and where are they from?",
+        "Which sales support agent is responsible for the most revenue?",
+        "Which artists have the most albums in the catalogue?",
+        "What is the average invoice total per country?",
+        "What is the salary of each employee?",
+    ],
+    "sakila": [
+        "Which film categories generate the most rental revenue?",
+        "How did the total payment amount change from month to month?",
+        "Which 10 actors appear in the most films?",
+        "Which countries have the most customers?",
+        "How many films are there for each rating?",
+        "Which films won an Academy Award?",
+    ],
+}
 
 # Single-hue series colour, stepped separately for light and dark themes so the marks
 # keep enough contrast on both surfaces.
@@ -160,8 +172,10 @@ with st.sidebar:
         "Ask a question about the database in plain English. The app finds the relevant "
         "tables, writes SQL, runs it read-only and explains the result."
     )
-    st.subheader("Try an example")
-    for example in EXAMPLES:
+    examples = EXAMPLES.get(settings.db_path.stem.lower(), [])
+    if examples:
+        st.subheader("Try an example")
+    for example in examples:
         if st.button(example, width="stretch"):
             st.session_state.pending = example
     st.subheader("Configuration")
