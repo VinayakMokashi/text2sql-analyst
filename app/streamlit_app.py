@@ -124,6 +124,9 @@ def render_chart(df: pd.DataFrame, spec: ChartSpec) -> None:
 
 # ------------------------------------------------------------------------- results
 def render_result(out: PipelineResult) -> None:
+    if out.interpreted_as:
+        # Show how a follow-up was understood, so a wrong reading is easy to spot.
+        st.caption(f"Interpreted as: *{md(out.interpreted_as)}*")
     if out.status == "unanswerable":
         st.warning(f"**I can't answer that from this database.** {md(out.message)}")
         render_details(out)
@@ -248,13 +251,15 @@ for past in history:
     with st.chat_message("assistant"):
         render_result(past)
 
-question = st.chat_input("e.g. Which country has the most customers?")
+question = st.chat_input('Ask a question, or a follow-up like "and for 2012?"')
 question = question or st.session_state.pop("pending", None)
 if question:
     with st.chat_message("user"):
         st.markdown(md(question))
     with st.chat_message("assistant"):
         with st.spinner("Finding tables, writing SQL, analysing..."):
-            result = pipeline.ask(question)
+            # Earlier answers give follow-up questions their context.
+            context = [past.as_turn() for past in history if past.status != "error"]
+            result = pipeline.ask(question, history=context)
         render_result(result)
     history.append(result)

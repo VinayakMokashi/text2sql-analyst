@@ -2,6 +2,7 @@
 
 python -m text2sql index              # build the table index (once per database)
 python -m text2sql ask "question"     # answer a question
+python -m text2sql chat               # a conversation; follow-up questions work
 python -m text2sql tables             # show indexed tables and their descriptions
 python -m text2sql models             # list the models your provider/key can use
 """
@@ -21,6 +22,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from text2sql.config import Settings
+from text2sql.conversation import Turn
 from text2sql.db import read_schema
 from text2sql.indexing import build_index, load_descriptions
 from text2sql.llm import LLMError, create_llm
@@ -148,6 +150,31 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0 if out.status != "error" else 1
 
 
+def cmd_chat(args: argparse.Namespace) -> int:
+    s = _settings(args)
+    pipeline = Pipeline.from_settings(s)
+    console.print(
+        "Ask about the data; follow-ups such as [italic]and for 2012?[/] work. "
+        "An empty line or [bold]exit[/] quits."
+    )
+    history: list[Turn] = []
+    while True:
+        try:
+            question = console.input("[bold cyan]you>[/] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if question.lower() in {"", "exit", "quit"}:
+            break
+        with console.status("Thinking..."):
+            out = pipeline.ask(question, history=history)
+        if out.interpreted_as:
+            console.print(f"[dim]Interpreted as: {escape(out.interpreted_as)}[/]")
+        render(out, show_sql=not args.no_sql)
+        if out.status != "error":
+            history.append(out.as_turn())
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="text2sql", description=__doc__.splitlines()[0])
@@ -174,6 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("question", nargs="+")
     p_ask.add_argument("--no-sql", action="store_true", help="hide the SQL")
     p_ask.set_defaults(func=cmd_ask)
+
+    p_chat = sub.add_parser("chat", parents=[common], help="ask questions in a conversation")
+    p_chat.add_argument("--no-sql", action="store_true", help="hide the SQL")
+    p_chat.set_defaults(func=cmd_chat)
 
     p_tables = sub.add_parser("tables", parents=[common], help="list indexed tables")
     p_tables.set_defaults(func=cmd_tables)
