@@ -1,0 +1,56 @@
+[
+  {
+    "model": "openai/gpt-oss-120b",
+    "questions": 16,
+    "ex": 92.9,
+    "ex_by_difficulty": {
+      "easy": 100.0,
+      "medium": 100.0,
+      "hard": 75.0
+    },
+    "declined_correctly": "2/2",
+    "false_refusals": 0,
+    "recall_at_n": 96.8,
+    "schema_recall": 98.6,
+    "avg_latency_s": 1.09,
+    "median_latency_s": 0.9,
+    "self_corrected": 0,
+    "llm_errors": 0
+  },
+  {
+    "model": "openai/gpt-oss-20b",
+    "questions": 16,
+    "ex": 92.9,
+    "ex_by_difficulty": {
+      "easy": 100.0,
+      "medium": 100.0,
+      "hard": 75.0
+    },
+    "declined_correctly": "2/2",
+    "false_refusals": 1,
+    "recall_at_n": 96.8,
+    "schema_recall": 98.6,
+    "avg_latency_s": 0.65,
+    "median_latency_s": 0.62,
+    "self_corrected": 0,
+    "llm_errors": 0
+  },
+  {
+    "model": "qwen/qwen3.8-27b",
+    "questions": 16,
+    "ex": 100.0,
+    "ex_by_difficulty": {
+      "easy": 100.0,
+      "medium": 100.0,
+      "hard": 100.0
+    },
+    "declined_correctly": "2/2",
+    "false_refusals": 0,
+    "recall_at_n": 96.8,
+    "schema_recall": 98.6,
+    "avg_latency_s": 0.45,
+    "median_latency_s": 0.35,
+    "self_corrected": 0,
+    "llm_errors": 0
+  }
+]
