@@ -72,6 +72,30 @@ class CachedSelector:
         return self._cache[question]
 
 
+class ReplaySelector:
+    """Replays the tables an earlier run used, instead of calling the helper model.
+
+    Adding a model to an existing comparison then costs one LLM call per question
+    instead of two, and the new model sees exactly the same tables as the old ones.
+    """
+
+    def __init__(self, log: Path) -> None:
+        self._source = log.name
+        self._tables = {
+            r["question"]: r["tables_used"]
+            for r in map(json.loads, log.read_text(encoding="utf-8").splitlines())
+        }
+
+    def select(self, question: str, *_args: Any, **_kwargs: Any) -> TableSelection:
+        if question not in self._tables:
+            raise KeyError(f"{question!r} is not in {self._source}; run without --reuse-selection")
+        tables = self._tables[question]
+        # An empty list means the helper declined the question in the earlier run.
+        return TableSelection(
+            tables, answerable=bool(tables), reason=f"replayed from {self._source}"
+        )
+
+
 def evaluate_model(
     pipe: Pipeline, model: str, questions: list[dict[str, Any]], gold_rows: dict[str, list], args
 ) -> list[dict[str, Any]]:
@@ -93,6 +117,7 @@ def evaluate_model(
             gold_tables = set()
 
         record = {
+            "model": model,
             "id": item["id"],
             "difficulty": item["difficulty"],
             "question": item["question"],
@@ -192,6 +217,12 @@ def main() -> int:
     parser.add_argument("--limit", type=int, help="only the first N questions")
     parser.add_argument("--sleep", type=float, default=1.0, help="pause between questions (s)")
     parser.add_argument("--out", type=Path, default=EVAL_DIR / "results")
+    parser.add_argument(
+        "--reuse-selection",
+        type=Path,
+        metavar="LOG.jsonl",
+        help="replay table selection from an earlier run's log (half the LLM calls)",
+    )
     args = parser.parse_args()
 
     questions = load_questions(args.questions, args.ids, args.limit)
@@ -210,22 +241,31 @@ def main() -> int:
     pipe = Pipeline.from_settings(
         settings, helper_model=args.helper_model, embedder=load_embedder(settings)
     )
-    pipe.selector = CachedSelector(pipe.selector)  # type: ignore[assignment]
+    if args.reuse_selection:
+        pipe.selector = ReplaySelector(args.reuse_selection)  # type: ignore[assignment]
+    else:
+        pipe.selector = CachedSelector(pipe.selector)  # type: ignore[assignment]
     args.out.mkdir(parents=True, exist_ok=True)
 
-    summaries = []
     for model in args.models:
         print(f"\n=== {model} ===")
         records = evaluate_model(pipe, model, questions, gold_rows, args)
         with (args.out / f"{slug(model)}.jsonl").open("w", encoding="utf-8") as fh:
             fh.writelines(json.dumps(r) + "\n" for r in records)
+
+    # The summary covers every model logged in this folder, so models can be added to a
+    # comparison one run at a time.
+    summaries = []
+    for log in sorted(args.out.glob("*.jsonl")):
+        records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        model = records[0].get("model") or log.stem.replace("_", "/", 1)  # older logs
         summaries.append(summarize(model, records))
 
     table = markdown_table(summaries, settings.top_n_tables)
     note = (
-        f"\n\nProvider: `{settings.llm_provider}`, helper model: "
+        f"\n\nProvider: `{settings.llm_provider}`, helper model (table selection): "
         f"`{args.helper_model or settings.helper_model}`, {len(questions)} questions, "
-        f"run on {time.strftime('%Y-%m-%d')}.\n"
+        f"updated {time.strftime('%Y-%m-%d')}.\n"
     )
     (args.out / "summary.md").write_text(table + note, encoding="utf-8")
     (args.out / "summary.json").write_text(json.dumps(summaries, indent=2), encoding="utf-8")
