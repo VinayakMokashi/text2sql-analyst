@@ -30,3 +30,6 @@ Thumbs.db
 
 # Partial eval runs (--ids / --limit) are scratch output
 eval/results/partial/
+
+# Streamlit secrets (the committed example is secrets.example.toml)
+.streamlit/secrets.toml

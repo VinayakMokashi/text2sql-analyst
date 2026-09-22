@@ -76,6 +76,7 @@ When the data cannot answer a question, it says so instead of guessing:
 - [Setup](#setup)
 - [Usage](#usage)
 - [Use your own database](#use-your-own-database)
+- [Deploy a free public demo](#deploy-a-free-public-demo)
 - [Models and providers](#models-and-providers)
 - [Evaluation](#evaluation)
 - [Safety](#safety)
@@ -223,11 +224,15 @@ cp .env.example .env           # Windows: copy .env.example .env
 `.env` is in `.gitignore`, so your key is never committed. If you would rather run
 everything locally, see [Run fully offline with Ollama](#run-fully-offline-with-ollama).
 
-### 3. Download the sample database
+### 3. Download the sample database and build its index (optional for the app)
+
+The Streamlit app does this by itself on first run, for both sample databases, using
+table descriptions that ship with the app. The CLI needs it done up front:
 
 ```bash
 python scripts/download_sample_db.py            # Chinook (default)
 python scripts/download_sample_db.py sakila     # optional second database
+python -m text2sql index                        # and --db data/sakila.db for Sakila
 ```
 
 This saves [Chinook](https://github.com/lerocha/chinook-database) to
@@ -236,18 +241,12 @@ tracks, genres, playlists, customers, employees, invoices and invoice lines. The
 optional [Sakila](https://github.com/jOOQ/sakila) database is a DVD-rental chain with
 15 tables; see [Use your own database](#use-your-own-database).
 
-### 4. Build the index
-
-```bash
-python -m text2sql index
-```
-
-This makes one short LLM call per table (11 calls for Chinook) to write the
+`index` makes one short LLM call per table (11 calls for Chinook) to write the
 descriptions, then embeds them locally. The first run also downloads the embedding
 model. With `--no-llm`, tables that have no description yet get a template one, so no
 API key is needed; existing descriptions are always reused unless you pass `--refresh`.
 
-### 5. Run it
+### 4. Run it
 
 ```bash
 streamlit run app/streamlit_app.py      # web UI at http://localhost:8501
@@ -359,6 +358,32 @@ To get better results:
 - The prompt, guardrails and executor are written for **SQLite**. Supporting another
   engine means a new connection/executor, and `T2S_SQL_DIALECT` for the prompt and the
   `sqlglot` checks (see [Limitations](#limitations-and-future-work)).
+
+---
+
+## Deploy a free public demo
+
+[Streamlit Community Cloud](https://streamlit.io/cloud) hosts public Streamlit apps for
+free, straight from a GitHub repository. The app is ready for it: on a fresh server it
+downloads the sample databases and builds their indexes by itself, and visitors can
+switch between Chinook and Sakila in the sidebar.
+
+1. Sign in at [share.streamlit.io](https://share.streamlit.io) with your GitHub account.
+2. **Create app** -> deploy from GitHub: repository `VinayakMokashi/text2sql-analyst`,
+   branch `main`, main file `app/streamlit_app.py`.
+3. Under **Advanced settings**, choose Python 3.12 and paste the secrets from
+   [`.streamlit/secrets.example.toml`](.streamlit/secrets.example.toml), with your real
+   `GROQ_API_KEY`.
+4. **Deploy.** The first start takes a few minutes (installing packages, then fetching
+   the database and the 65 MB embedding model); after that, answers take about 2 s.
+
+**Protect your quota.** Every visitor spends your free Groq tokens, and the free tier
+is shared by everything that uses your account (about 200k tokens per model per day at
+the time of writing). `T2S_DEMO_DAILY_LIMIT` caps questions per day across all
+visitors, and `T2S_DEMO_SESSION_LIMIT` caps them per visit; the sidebar shows what is
+left. At 40 questions a day the demo uses well under half of a model's daily budget.
+The count lives in the server process, so it starts over if Streamlit restarts the app
+(for example after it has been asleep).
 
 ---
 
@@ -587,6 +612,8 @@ text2sql-analyst/
 │   ├── prompts.py           # every prompt in one place
 │   ├── pipeline.py          # Pipeline.ask(): the stages wired together
 │   ├── conversation.py      # follow-up questions -> standalone questions
+│   ├── samples.py           # download the Chinook / Sakila sample databases
+│   ├── demo.py              # self-setup of sample data, daily question budget
 │   ├── cli.py               # python -m text2sql {index,ask,chat,tables,models}
 │   ├── evaluation.py        # execution-accuracy matching, table recall
 │   ├── llm/                 # provider interface: OpenAI-compatible client, fake LLM, factory
@@ -596,7 +623,7 @@ text2sql-analyst/
 │   ├── generation/          # SQL generation, extraction and repair
 │   ├── execution/           # sqlglot guardrails, read-only executor
 │   └── analysis/            # answer + analysis, column roles, chart picker
-├── app/streamlit_app.py     # web UI
+├── app/                     # Streamlit web UI + bundled sample-table descriptions
 ├── scripts/download_sample_db.py   # Chinook or Sakila
 ├── eval/                    # 3 question sets, run_eval.py, results/ (logs + summaries)
 └── tests/                   # pytest suite, runs offline (fake LLM + hashing embedder)
