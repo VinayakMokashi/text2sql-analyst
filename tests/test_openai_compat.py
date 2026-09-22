@@ -61,8 +61,9 @@ def test_gives_up_when_the_server_asks_to_wait_too_long(llm, monkeypatch):
         raise rate_limit_error("3600")  # e.g. a daily quota is exhausted
 
     monkeypatch.setattr(llm._client.chat.completions, "create", create)
-    with pytest.raises(LLMError, match="daily"):
+    with pytest.raises(LLMError, match="daily") as info:
         llm.complete("s", "u")
+    assert info.value.rate_limited  # lets the app tell the user to come back later
 
 
 def test_non_retryable_errors_fail_fast(llm, monkeypatch):
@@ -74,9 +75,10 @@ def test_non_retryable_errors_fail_fast(llm, monkeypatch):
         raise openai.AuthenticationError("bad key", response=response, body=None)
 
     monkeypatch.setattr(llm._client.chat.completions, "create", create)
-    with pytest.raises(LLMError, match="bad key"):
+    with pytest.raises(LLMError, match="bad key") as info:
         llm.complete("s", "u")
     assert len(calls) == 1
+    assert not info.value.rate_limited
 
 
 def test_retry_delay_falls_back_to_backoff():

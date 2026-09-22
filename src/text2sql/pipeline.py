@@ -67,6 +67,7 @@ class PipelineResult:
     chart: ChartSpec | None = None
     timings: dict[str, float] = field(default_factory=dict)
     interpreted_as: str | None = None  # the standalone form of a follow-up question
+    rate_limited: bool = False  # the error was the provider's rate limit or daily quota
 
     @property
     def ok(self) -> bool:
@@ -192,6 +193,7 @@ class Pipeline:
             self._run(out, analyze, history)
         except LLMError as exc:
             out.status, out.message = "error", f"The language model request failed: {exc}"
+            out.rate_limited = exc.rate_limited
         except Exception as exc:  # noqa: BLE001 - an app should report, not crash
             # Anything unexpected is a bug; the log keeps the traceback for fixing it.
             log.exception("Unexpected error while answering %r", out.question)

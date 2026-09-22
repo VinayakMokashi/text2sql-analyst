@@ -101,7 +101,8 @@ class OpenAICompatibleLLM(LLM):
                 if attempt >= limit or elapsed + delay > self._max_wait_s:
                     raise LLMError(
                         f"{name}: gave up after {attempt + 1} attempt(s) and {elapsed:.0f}s "
-                        f"({exc}). {hint}"
+                        f"({exc}). {hint}",
+                        rate_limited=isinstance(exc, openai.RateLimitError),
                     ) from exc
                 time.sleep(delay)
                 waited += delay

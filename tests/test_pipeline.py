@@ -83,6 +83,19 @@ def test_llm_failure_becomes_readable_error(make_pipeline):
     out = pipe.ask("anything")
     assert out.status == "error"
     assert "rate limited" in out.message
+    assert not out.rate_limited
+
+
+def test_used_up_quota_is_flagged_so_the_app_can_word_it(make_pipeline):
+    pipe, _ = make_pipeline(["SELECT 1"])
+
+    def quota_gone(*_args, **_kwargs):
+        raise LLMError("429 tokens per day", rate_limited=True)
+
+    pipe.generator.llm.complete = quota_gone
+    out = pipe.ask("anything")
+    assert out.status == "error"
+    assert out.rate_limited
 
 
 def test_empty_question(make_pipeline):

@@ -89,6 +89,13 @@ def md(text: str) -> str:
     return text.replace("$", r"\$")
 
 
+def demo_mode() -> bool:
+    """True when the app runs as a public demo, i.e. with a question limit set."""
+    return settings is not None and (
+        settings.demo_daily_limit is not None or settings.demo_session_limit is not None
+    )
+
+
 def theme() -> str:
     try:
         return st.context.theme.type or "light"
@@ -164,7 +171,17 @@ def render_result(out: PipelineResult) -> None:
         render_details(out)
         return
     if out.status == "error":
-        st.error(md(out.message))
+        if out.rate_limited:
+            # A visitor needs to know to come back later, not the provider's raw error
+            # (which also names the account's organisation).
+            st.error(
+                "**The free model quota behind this app is used up for now.** "
+                "Please try again in a little while."
+            )
+            if not demo_mode():
+                st.caption(md(out.message))
+        else:
+            st.error(md(out.message))
         render_details(out)
         return
 

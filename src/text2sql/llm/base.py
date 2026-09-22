@@ -42,6 +42,12 @@ class LLMResponse:
 class LLMError(RuntimeError):
     """Raised when the provider fails (network, auth, rate limit after retries...)."""
 
+    def __init__(self, message: str, *, rate_limited: bool = False) -> None:
+        super().__init__(message)
+        # A rate limit or used-up quota clears with time, so an app can simply ask the
+        # user to come back later instead of showing the provider's raw error.
+        self.rate_limited = rate_limited
+
 
 class LLM(ABC):
     """A chat model bound to one provider and one model name."""
