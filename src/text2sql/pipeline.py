@@ -112,7 +112,7 @@ def check_index(settings: Settings) -> None:
         raise ValueError(
             f"The index in {settings.db_index_dir} was built for {built_for}, not "
             f"{settings.db_path.resolve()}. Set T2S_INDEX_DIR to a different folder, "
-            "or run `python -m text2sql index` to rebuild it for this database."
+            "or run `python -m text2sql index --force` to rebuild it for this database."
         )
     model = info.get("embedding_model")
     if model and model != settings.embedding_model:
