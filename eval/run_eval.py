@@ -1,4 +1,4 @@
-"""Evaluate the pipeline on eval/questions.jsonl and compare SQL models.
+"""Evaluate the pipeline on a question set and compare SQL models.
 
 For each SQL model it reports:
   * execution accuracy (EX) on answerable questions, overall and by difficulty
@@ -12,6 +12,9 @@ For each SQL model it reports:
 Table selection (helper model) runs once per question and its result is shared by all
 SQL models, so every model sees exactly the same schema and differences come from SQL
 generation alone. The analysis step is skipped because it does not affect EX.
+
+Questions that fail because of the provider (rate limits, outages) or a harness bug are
+not the SQL model's fault: they are left out of EX and reported with a warning.
 
 Usage:
     python eval/run_eval.py                                   # model from .env
@@ -36,11 +39,13 @@ from text2sql.evaluation import recall, results_match, tables_in_sql
 from text2sql.execution import execute_query
 from text2sql.generation import SQLGenerator
 from text2sql.llm import create_llm
-from text2sql.pipeline import Pipeline, load_embedder
+from text2sql.pipeline import Pipeline, PipelineResult, load_embedder
 from text2sql.retrieval import TableSelection, TableSelector
 
 EVAL_DIR = Path(__file__).parent
+DEFAULT_OUT = EVAL_DIR / "results"
 DIFFICULTIES = ["easy", "medium", "hard"]
+GOLD_ROW_LIMIT = 10_000
 
 
 def load_questions(path: Path, ids: list[str] | None, limit: int | None) -> list[dict[str, Any]]:
@@ -59,6 +64,19 @@ def slug(model: str) -> str:
     return re.sub(r"[^a-zA-Z0-9.-]+", "_", model)
 
 
+def read_log(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def error_kind(out: PipelineResult) -> str | None:
+    """'llm' for provider failures, 'harness' for bugs; None when the model is to blame."""
+    if out.message.startswith("The language model request failed"):
+        return "llm"
+    if out.message.startswith("Unexpected error"):
+        return "harness"
+    return None
+
+
 class CachedSelector:
     """Memoises table selection per question so all SQL models get the same tables."""
 
@@ -73,7 +91,7 @@ class CachedSelector:
 
 
 class ReplaySelector:
-    """Replays the tables an earlier run used, instead of calling the helper model.
+    """Replays the table selection of an earlier run instead of calling the helper model.
 
     Adding a model to an existing comparison then costs one LLM call per question
     instead of two, and the new model sees exactly the same tables as the old ones.
@@ -81,19 +99,25 @@ class ReplaySelector:
 
     def __init__(self, log: Path) -> None:
         self._source = log.name
-        self._tables = {
-            r["question"]: r["tables_used"]
-            for r in map(json.loads, log.read_text(encoding="utf-8").splitlines())
-        }
+        self._selections: dict[str, TableSelection] = {}
+        for r in read_log(log):
+            if "selection_answerable" in r:  # logs that record the selection explicitly
+                if r["selection_answerable"] is None:
+                    continue  # the selection never completed (e.g. a provider error)
+                tables, answerable = r["selection_tables"], r["selection_answerable"]
+            else:  # older logs: an empty table list is ambiguous if the question failed
+                if not r["tables_used"] and (r.get("llm_error") or r["status"] == "error"):
+                    continue
+                tables, answerable = r["tables_used"], bool(r["tables_used"])
+            self._selections[r["question"]] = TableSelection(
+                tables, answerable=answerable, reason=f"replayed from {self._source}"
+            )
+
+    def missing(self, questions: list[dict[str, Any]]) -> list[str]:
+        return [q["id"] for q in questions if q["question"] not in self._selections]
 
     def select(self, question: str, *_args: Any, **_kwargs: Any) -> TableSelection:
-        if question not in self._tables:
-            raise KeyError(f"{question!r} is not in {self._source}; run without --reuse-selection")
-        tables = self._tables[question]
-        # An empty list means the helper declined the question in the earlier run.
-        return TableSelection(
-            tables, answerable=bool(tables), reason=f"replayed from {self._source}"
-        )
+        return self._selections[question]
 
 
 def evaluate_model(
@@ -108,16 +132,22 @@ def evaluate_model(
         answerable = bool(variants)
 
         if answerable:
-            correct = out.ok and any(
-                results_match(rows, out.result.rows) for rows in gold_rows[item["id"]]
+            correct = (
+                out.ok
+                and not out.result.truncated  # a cut-off result cannot be verified
+                and any(results_match(rows, out.result.rows) for rows in gold_rows[item["id"]])
             )
             gold_tables = tables_in_sql(variants[0])
         else:
             correct = out.status == "unanswerable"
             gold_tables = set()
 
+        kind = error_kind(out)
         record = {
             "model": model,
+            "provider": s.llm_provider,
+            "helper_model": args.helper_model or s.helper_model,
+            "questions_file": args.questions.name,
             "id": item["id"],
             "difficulty": item["difficulty"],
             "question": item["question"],
@@ -125,10 +155,11 @@ def evaluate_model(
             "correct": bool(correct),
             "status": out.status,
             "message": out.message,
+            "error_kind": kind,
+            "llm_error": kind == "llm",
             "sql": out.sql,
             "attempts": len(out.attempts),
             "repaired": len(out.attempts) > 1 and out.ok,
-            "llm_error": out.message.startswith("The language model request failed"),
             "latency_s": round(out.total_s, 3),
             # Model time for every SQL attempt plus query execution. Excludes time spent
             # waiting out free-tier rate limits, which says nothing about the model.
@@ -138,12 +169,16 @@ def evaluate_model(
                 3,
             ),
             "candidates": [c.name for c in out.candidates],
+            # The selection itself (None if it never completed), so a later run can
+            # replay it without guessing from tables_used.
+            "selection_tables": out.selection.tables if out.selection else None,
+            "selection_answerable": out.selection.answerable if out.selection else None,
             "tables_used": out.tables_used,
             "recall_at_n": recall(gold_tables, [c.name for c in out.candidates]),
             "schema_recall": recall(gold_tables, out.tables_used),
         }
         records.append(record)
-        mark = "PASS" if correct else "FAIL"
+        mark = "PASS" if correct else f"ERROR ({kind})" if kind else "FAIL"
         print(
             f"  [{n:>2}/{len(questions)}] {mark} {item['id']} {out.total_s:5.1f}s "
             f"{item['question'][:60]}"
@@ -154,8 +189,10 @@ def evaluate_model(
 
 
 def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
-    answerable = [r for r in records if r["answerable"]]
-    unanswerable = [r for r in records if not r["answerable"]]
+    excluded = [r for r in records if r.get("error_kind") or r.get("llm_error")]
+    scored = [r for r in records if r not in excluded]
+    answerable = [r for r in scored if r["answerable"]]
+    unanswerable = [r for r in scored if not r["answerable"]]
 
     def pct(rows: list[dict[str, Any]], key: str = "correct") -> float | None:
         return round(100 * sum(bool(r[key]) for r in rows) / len(rows), 1) if rows else None
@@ -164,7 +201,7 @@ def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
     for r in answerable:
         by_diff[r["difficulty"]].append(r)
     # Only questions that reached SQL generation (declined ones stop earlier).
-    latencies = [r["sql_latency_s"] for r in records if r["attempts"] and not r["llm_error"]]
+    latencies = [r["sql_latency_s"] for r in scored if r["attempts"]]
     return {
         "model": model,
         "questions": len(records),
@@ -180,8 +217,9 @@ def summarize(model: str, records: list[dict[str, Any]]) -> dict[str, Any]:
         else None,
         "avg_latency_s": round(statistics.mean(latencies), 2) if latencies else None,
         "median_latency_s": round(statistics.median(latencies), 2) if latencies else None,
-        "self_corrected": sum(r["repaired"] for r in records),
-        "llm_errors": sum(r["llm_error"] for r in records),
+        "self_corrected": sum(r["repaired"] for r in scored),
+        "excluded": len(excluded),
+        "llm_errors": sum(bool(r.get("llm_error")) for r in records),
     }
 
 
@@ -198,13 +236,48 @@ def markdown_table(summaries: list[dict[str, Any]], top_n: int) -> str:
     rows = []
     for s in summaries:
         d = s["ex_by_difficulty"]
+        latency = "-" if s["avg_latency_s"] is None else f"{s['avg_latency_s']}s"
         rows.append(
             f"| `{s['model']}` | **{p(s['ex'])}** | {p(d.get('easy'))} | "
             f"{p(d.get('medium'))} | {p(d.get('hard'))} | {s['declined_correctly']} | "
             f"{s['false_refusals']} | {p(s['recall_at_n'])} | {p(s['schema_recall'])} | "
-            f"{s['avg_latency_s']}s | {s['self_corrected']} |"
+            f"{latency} | {s['self_corrected']} |"
         )
     return "\n".join([header, *rows])
+
+
+def build_summary(out_dir: Path, question_ids: set[str], top_n: int) -> tuple[str, list]:
+    """Summarise every log in ``out_dir`` that covers exactly this run's questions.
+
+    Models can be added to a comparison one run at a time; logs over a different
+    question set (say, a partial run) are left out rather than mixed in.
+    """
+    summaries, skipped, providers, helpers = [], [], set(), set()
+    for log in sorted(out_dir.glob("*.jsonl")):
+        records = read_log(log)
+        if not records or {r["id"] for r in records} != question_ids:
+            skipped.append(log.name)
+            continue
+        model = records[0].get("model") or log.stem.replace("_", "/", 1)  # older logs
+        providers.update(r["provider"] for r in records if "provider" in r)
+        helpers.update(r["helper_model"] for r in records if "helper_model" in r)
+        summaries.append(summarize(model, records))
+
+    note = (
+        f"\n\nProvider: {', '.join(f'`{p}`' for p in sorted(providers)) or 'see logs'}; "
+        f"helper model (table selection): "
+        f"{', '.join(f'`{h}`' for h in sorted(helpers)) or 'see logs'}; "
+        f"{len(question_ids)} questions; updated {time.strftime('%Y-%m-%d')}.\n"
+    )
+    excluded = sum(s["excluded"] for s in summaries)
+    if excluded:
+        note += (
+            f"\n{excluded} question run(s) were left out of the scores because of provider "
+            "or harness errors; see the logs.\n"
+        )
+    if skipped:
+        print(f"Not in this summary (different question set or empty): {', '.join(skipped)}")
+    return markdown_table(summaries, top_n) + note, summaries
 
 
 def main() -> int:
@@ -216,7 +289,7 @@ def main() -> int:
     parser.add_argument("--ids", nargs="*", help="only these question ids")
     parser.add_argument("--limit", type=int, help="only the first N questions")
     parser.add_argument("--sleep", type=float, default=1.0, help="pause between questions (s)")
-    parser.add_argument("--out", type=Path, default=EVAL_DIR / "results")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument(
         "--reuse-selection",
         type=Path,
@@ -226,25 +299,43 @@ def main() -> int:
     args = parser.parse_args()
 
     questions = load_questions(args.questions, args.ids, args.limit)
+    if not questions:
+        parser.error("no questions match --ids/--limit")
+    if (args.ids or args.limit) and args.out == DEFAULT_OUT:
+        # A partial run must never overwrite the full, published logs.
+        args.out = DEFAULT_OUT / "partial"
+        print(f"Partial run: writing to {args.out}")
     print(
         f"{len(questions)} questions | provider {settings.llm_provider} | helper model "
         f"{args.helper_model or settings.helper_model} | db {settings.db_path}"
     )
 
     # Run every gold query once up front; a broken gold query should fail loudly.
-    gold_rows = {
-        q["id"]: [
-            execute_query(settings.db_path, sql, max_rows=10_000).rows for sql in gold_variants(q)
+    gold_rows: dict[str, list] = {}
+    for q in questions:
+        results = [
+            execute_query(settings.db_path, sql, max_rows=GOLD_ROW_LIMIT)
+            for sql in gold_variants(q)
         ]
-        for q in questions
-    }
+        if any(r.truncated for r in results):
+            sys.exit(f"Gold result for {q['id']} has more than {GOLD_ROW_LIMIT} rows.")
+        gold_rows[q["id"]] = [r.rows for r in results]
+    # Let predictions return as many rows as the largest gold answer, so a question with
+    # a big correct result can still be matched.
+    biggest = max((len(rows) for v in gold_rows.values() for rows in v), default=0)
+    settings = settings.model_copy(update={"max_rows": max(settings.max_rows, biggest + 1)})
+
+    if args.reuse_selection:
+        replay = ReplaySelector(args.reuse_selection)
+        if missing := replay.missing(questions):
+            sys.exit(
+                f"{args.reuse_selection.name} has no usable table selection for: "
+                f"{', '.join(missing)}. Run without --reuse-selection."
+            )
     pipe = Pipeline.from_settings(
         settings, helper_model=args.helper_model, embedder=load_embedder(settings)
     )
-    if args.reuse_selection:
-        pipe.selector = ReplaySelector(args.reuse_selection)  # type: ignore[assignment]
-    else:
-        pipe.selector = CachedSelector(pipe.selector)  # type: ignore[assignment]
+    pipe.selector = replay if args.reuse_selection else CachedSelector(pipe.selector)  # type: ignore[assignment]
     args.out.mkdir(parents=True, exist_ok=True)
 
     for model in args.models:
@@ -253,25 +344,12 @@ def main() -> int:
         with (args.out / f"{slug(model)}.jsonl").open("w", encoding="utf-8") as fh:
             fh.writelines(json.dumps(r) + "\n" for r in records)
 
-    # The summary covers every model logged in this folder, so models can be added to a
-    # comparison one run at a time.
-    summaries = []
-    for log in sorted(args.out.glob("*.jsonl")):
-        records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-        model = records[0].get("model") or log.stem.replace("_", "/", 1)  # older logs
-        summaries.append(summarize(model, records))
-
-    table = markdown_table(summaries, settings.top_n_tables)
-    note = (
-        f"\n\nProvider: `{settings.llm_provider}`, helper model (table selection): "
-        f"`{args.helper_model or settings.helper_model}`, {len(questions)} questions, "
-        f"updated {time.strftime('%Y-%m-%d')}.\n"
-    )
-    (args.out / "summary.md").write_text(table + note, encoding="utf-8")
+    table, summaries = build_summary(args.out, {q["id"] for q in questions}, settings.top_n_tables)
+    (args.out / "summary.md").write_text(table, encoding="utf-8")
     (args.out / "summary.json").write_text(json.dumps(summaries, indent=2), encoding="utf-8")
-    print("\n" + table + note)
-    if any(s["llm_errors"] for s in summaries):
-        print("Warning: some questions failed because of LLM/provider errors (see *.jsonl).")
+    print("\n" + table)
+    if any(s["excluded"] for s in summaries):
+        print("Warning: some questions failed because of provider or harness errors.")
     return 0
 
 
