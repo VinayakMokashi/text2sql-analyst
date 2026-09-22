@@ -668,16 +668,20 @@ self-correction loop, abstention, the chart rules and the evaluation metric.
   compare models and catch regressions, not to claim benchmark numbers. The dev set was
   used for tuning, so its scores are optimistic. The held-out and Sakila sets were never
   used for tuning, but they were written by the same person who built the system. A
-  public benchmark would be the next step.
+  public benchmark is the next step (see below).
 - **Free-tier limits.** Hosted free tiers cap requests and tokens per day.
 
-**Possible improvements**
+**Future scope**
 
+- **A public benchmark.** Score the pipeline on
+  [BIRD mini-dev](https://github.com/bird-bench/mini_dev) (500 questions over 11 real
+  databases, each with an annotator's hint) or Spider 2.0-lite, and report the
+  benchmark's strict EX next to this project's lenient EX. Its schemas are much larger
+  than Chinook's, so a full run needs more tokens than a free tier gives in a day.
 - Retrieve **few-shot examples** (similar question → SQL pairs) into the prompt
 - **Value retrieval**: index distinct column values to fix misspelled filters
 - **Self-consistency**: generate several queries and keep the answer most of them agree on
 - PostgreSQL / DuckDB executors
-- Evaluate on a public benchmark subset (Spider 2.0-lite, BIRD mini-dev)
 - Caching of repeated questions and a query history view
 
 ---
