@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from text2sql.execution import (
@@ -96,6 +98,24 @@ def test_authorizer_refuses_what_the_parser_lets_through(shop_db):
     # pragma_table_info() is a SELECT to sqlglot, but not a data read to SQLite.
     with pytest.raises(SQLExecutionError, match="not authorized"):
         execute_query(shop_db, "SELECT * FROM pragma_table_info('customers')")
+
+
+def test_authorizer_refuses_denied_functions_on_its_own(shop_db):
+    # The layer must hold even without the parser check in front of it, so this runs
+    # the authorizer directly on a real connection, with SQLite's own argument order.
+    from contextlib import closing
+
+    from text2sql.execution.executor import _authorize
+
+    with closing(sqlite3.connect(shop_db)) as conn:
+        # edit() exists only in the sqlite3 shell. A harmless stand-in makes it callable,
+        # so the authorizer is the only thing that can refuse it.
+        conn.create_function("edit", 1, lambda value: value)
+        assert conn.execute("SELECT edit('x')").fetchone() == ("x",)
+        conn.set_authorizer(_authorize)
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            conn.execute("SELECT edit('x')")
+        assert conn.execute("SELECT abs(-2)").fetchone() == (2,)  # ordinary functions run
 
 
 def test_one_huge_value_cannot_be_built(shop_db):

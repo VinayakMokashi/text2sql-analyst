@@ -53,10 +53,11 @@ class QueryResult:
         return pd.DataFrame(self.rows, columns=self.columns)
 
 
-def _authorize(action: int, arg1: str | None, *_: object) -> int:
+def _authorize(action: int, arg1: str | None, arg2: str | None, *_: object) -> int:
     if action not in _ALLOWED_ACTIONS:
         return sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_FUNCTION and (arg1 or "").lower() in DENIED_FUNCTIONS:
+    # For a function call SQLite passes (None, function name), so the name is in arg2.
+    if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() in DENIED_FUNCTIONS:
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
 
