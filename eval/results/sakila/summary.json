@@ -12,9 +12,10 @@
     "false_refusals": 0,
     "recall_at_n": 96.8,
     "schema_recall": 100.0,
-    "avg_latency_s": 1.07,
-    "median_latency_s": 0.9,
+    "avg_latency_s": 1.17,
+    "median_latency_s": 0.89,
     "self_corrected": 0,
+    "excluded": 0,
     "llm_errors": 0
   },
   {
@@ -30,9 +31,10 @@
     "false_refusals": 0,
     "recall_at_n": 96.8,
     "schema_recall": 100.0,
-    "avg_latency_s": 0.72,
-    "median_latency_s": 0.64,
+    "avg_latency_s": 0.86,
+    "median_latency_s": 0.86,
     "self_corrected": 0,
+    "excluded": 0,
     "llm_errors": 0
   },
   {
@@ -48,9 +50,10 @@
     "false_refusals": 0,
     "recall_at_n": 96.8,
     "schema_recall": 100.0,
-    "avg_latency_s": 0.37,
+    "avg_latency_s": 0.35,
     "median_latency_s": 0.32,
     "self_corrected": 0,
+    "excluded": 0,
     "llm_errors": 0
   }
 ]

@@ -519,32 +519,37 @@ for data that does not exist, such as salaries, ratings or awards.
 All models are open-weight and were served by Groq's free tier. In every run the helper
 model (`qwen/qwen3.8-27b`) chose the tables once per question, and all SQL models got
 that same choice, so differences come from SQL generation alone. The full logs, with
-every generated query, are in [`eval/results/`](eval/results/). They were produced
-before the end-to-end review of 22 September (the last at commit `624a725`). The review
-changed how SQL is pulled out of replies and how schemas and keys are read, but not the
-prompts, and re-scoring the logged queries with today's metric gives the same numbers;
-the current code has not been re-run on all three sets.
+every generated query, are in [`eval/results/`](eval/results/). All three sets were
+re-run with the current code on 23 September 2026, after the reviews; the logs and the
+numbers below are from that run.
 
 Execution accuracy on answerable questions:
 
 | SQL model | Chinook dev | Chinook held-out | Sakila | Unanswerable declined | Avg SQL latency |
 |---|---|---|---|---|---|
 | `openai/gpt-oss-120b` (default) | **100%** | **100%** | **100%** | 10/10 | ~1.0 s |
-| `openai/gpt-oss-20b` | **97.7%** | **100%** | **100%** | 10/10 | ~0.8 s |
+| `openai/gpt-oss-20b` | **97.7%** | **95%** | **100%** | 10/10 | ~0.8 s |
 | `qwen/qwen3.8-27b` | **100%** | **100%** | **100%** | 10/10 | ~0.35 s |
 
 Per-difficulty breakdowns for each set are in its `summary.md`:
 [dev](eval/results/summary.md), [held-out](eval/results/heldout/summary.md),
-[Sakila](eval/results/sakila/summary.md). The dev-set runs used the earlier table cap of
-4 (see fix 3 below); none of the dev questions needs more than 4 tables.
+[Sakila](eval/results/sakila/summary.md). Each `summary.md` also records the date of the
+run that produced it.
 
 **Takeaways**
 
 - Once the right tables are in the prompt, all three models answer nearly everything on
-  these schemas. The only miss in the final runs was a formatting difference:
-  `gpt-oss-20b` answered "Edwards, Nancy", while the gold queries accept "Nancy" and
-  "Edwards" as two values or "Nancy Edwards", not last name first. A human would mark it
-  correct; this project's EX does not.
+  these schemas. Both misses are `gpt-oss-20b`'s. One is a formatting difference: it
+  answered "Edwards, Nancy", while the gold queries accept "Nancy" and "Edwards" as two
+  values or "Nancy Edwards", not last name first. A human would mark it correct; this
+  project's EX does not.
+- **The same code does not always give the same answer.** In the first held-out run
+  `gpt-oss-20b` scored 100%; re-running it on 23 September gave 95%, because for
+  "average number of tracks per invoice" it wrote `SUM(Quantity) / COUNT(DISTINCT
+  InvoiceId)` without the `* 1.0` it had used before, and SQLite's integer division
+  returned 5 instead of 5.44. Temperature is 0, but the serving is not deterministic, so
+  a single score on 24 questions carries real noise. `gpt-oss-120b` and `qwen3.8-27b`
+  reproduced every published number exactly, including retrieval recall and refusals.
 - **Qwen3.8-27B matches `gpt-oss-120b`'s accuracy at about a third of the latency.**
   `gpt-oss-120b` stays the default SQL model for two reasons. A different model from the
   helper doubles the free-tier quota, and it keeps a reasoning model on the hardest step.
