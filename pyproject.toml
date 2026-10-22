@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text2sql-analyst"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ask questions about a SQL database in plain English and get answers, analysis and charts."
 readme = "README.md"
 license = "MIT"
@@ -14,17 +14,19 @@ authors = [{ name = "Vinayak Mokashi" }]
 dependencies = [
     "openai>=1.40",
     "sqlglot>=25",
-    "chromadb>=0.5",
     "fastembed>=0.4",
     "pydantic-settings>=2.3",
     "python-dotenv>=1.0",
     "pandas>=2.2",
-    "streamlit>=1.51",
-    "altair>=5",
     "rich>=13",
 ]
 
 [project.optional-dependencies]
+# The vector index of table descriptions (`text2sql index`, the default retriever).
+index = ["chromadb>=0.5"]
+# The Streamlit app.
+app = ["streamlit>=1.51", "altair>=5"]
+all = ["text2sql-analyst[index,app]"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]

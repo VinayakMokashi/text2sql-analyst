@@ -4,7 +4,7 @@ PY ?= python
 .PHONY: install data index app ask eval test lint
 
 install:
-	$(PY) -m pip install -e ".[dev]"
+	$(PY) -m pip install -e ".[all,dev]"
 
 data:
 	$(PY) scripts/download_sample_db.py chinook

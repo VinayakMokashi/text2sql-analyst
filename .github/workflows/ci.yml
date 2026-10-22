@@ -23,7 +23,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[all,dev]"
 
       - name: Lint
         run: |
