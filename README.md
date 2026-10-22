@@ -404,6 +404,12 @@ Three hooks make that work:
 - **Hints.** `Pipeline.ask(question, hints=[...])` shows the application's notes about
   the question to the table-selection and SQL steps, such as which database value a name
   refers to. Without hints the prompts are unchanged.
+- **Value linking.** Models guess the values of categorical columns from a few sample
+  rows. `text2sql.linking` gives them the real ones: `ColumnCatalogue` lists a short
+  column's values ("annual_values.metric takes only these values: ..."), and
+  `ValueMatcher` finds the values a question mentions, by name or alias ('"Coke" is
+  companies.name = 'Coca-Cola''). `Pipeline(..., linker=StaticLinker(...))` adds them to
+  every question.
 
 ```python
 from text2sql.analysis import Analyst
@@ -428,6 +434,18 @@ result = pipeline.ask(
     "Which 5 artists have the most tracks?", hints=["'AC/DC' is Artist.Name = 'AC/DC'"]
 )
 print(result.sql, result.result.rows if result.ok else result.message)
+```
+
+With value linking instead of hand-written hints:
+
+```python
+from text2sql.linking import ColumnCatalogue, StaticLinker, ValueMatcher
+
+linker = StaticLinker(
+    catalogues=[ColumnCatalogue.read(settings.db_path, "Genre", "Name")],
+    matchers=[ValueMatcher.read(settings.db_path, "Artist", "Name", {"ACDC": "AC/DC"})],
+)
+pipeline = Pipeline(settings, schemas, ..., linker=linker)  # the other parts as above
 ```
 
 ---
