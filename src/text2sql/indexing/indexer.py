@@ -5,6 +5,9 @@ Output lives in ``<index_dir>/<db name>/``:
     edit a description and re-run ``index`` to improve retrieval for your data)
   * ``index_info.json``  - which database file and embedding model built the index
   * ``chroma/``          - the persistent vector store
+
+ChromaDB is imported only when a collection is opened, so the rest of the package (and
+a pipeline that uses another retriever) works without the ``index`` extra installed.
 """
 
 from __future__ import annotations
@@ -15,15 +18,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
-
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+from typing import TYPE_CHECKING, Any
 
 from text2sql.db.schema import TableSchema
 from text2sql.indexing.describe import describe_table, index_document
 from text2sql.indexing.embeddings import Embedder
 from text2sql.llm.base import LLM
+
+if TYPE_CHECKING:
+    import chromadb
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +43,13 @@ class IndexedTable:
 
 def open_collection(index_dir: Path, reset: bool = False) -> chromadb.Collection:
     """Open (or create) the persistent Chroma collection for one database."""
+    try:
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+    except ImportError as exc:
+        raise ImportError(
+            "The vector index needs ChromaDB: pip install 'text2sql-analyst[index]'."
+        ) from exc
     client = chromadb.PersistentClient(
         path=str(index_dir / "chroma"), settings=ChromaSettings(anonymized_telemetry=False)
     )
