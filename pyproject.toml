@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text2sql-analyst"
-version = "0.2.0"
+version = "0.3.0"
 description = "Ask questions about a SQL database in plain English and get answers, analysis and charts."
 readme = "README.md"
 license = "MIT"
