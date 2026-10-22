@@ -85,6 +85,7 @@ When the data cannot answer a question, it says so instead of guessing:
 - [Setup](#setup)
 - [Usage](#usage)
 - [Use your own database](#use-your-own-database)
+- [Use it as a library](#use-it-as-a-library)
 - [Deploy a free public demo](#deploy-a-free-public-demo)
 - [Models and providers](#models-and-providers)
 - [Evaluation](#evaluation)
@@ -218,8 +219,11 @@ python -m venv .venv
 # Windows (PowerShell):   .venv\Scripts\Activate.ps1
 # macOS / Linux:          source .venv/bin/activate
 
-pip install -e ".[dev]"        # or: pip install -r requirements.txt && pip install -e .
+pip install -e ".[all,dev]"    # or: pip install -r requirements.txt && pip install -e .
 ```
+
+`all` adds the vector index (ChromaDB, the `index` extra) and the Streamlit app (`app`);
+the pipeline itself needs neither ([Use it as a library](#use-it-as-a-library)).
 
 ### 2. Get a free LLM API key (Groq)
 
@@ -375,6 +379,56 @@ To get better results:
 - The prompt, guardrails and executor are written for **SQLite**. Supporting another
   engine means a new connection/executor, and `T2S_SQL_DIALECT` for the prompt and the
   `sqlglot` checks (see [Limitations](#limitations-and-future-work)).
+
+---
+
+## Use it as a library
+
+The pipeline can run inside another application, with that application's model client
+and without the app or the vector index:
+
+```bash
+pip install "text2sql-analyst @ git+https://github.com/VinayakMokashi/text2sql-analyst"
+# add [index] for the vector index of table descriptions, [app] for the Streamlit app
+```
+
+Three hooks make that work:
+
+- **Your own model client.** Every stage calls only `LLM.complete(system, user)`.
+  Subclass `text2sql.llm.LLM` and implement `_complete(system, user, temperature,
+  max_tokens)`; reasoning blocks are stripped for you.
+- **No vector index for small schemas.** `AllTablesRetriever(schemas, descriptions)`
+  offers every table to the table-selection step. For a dozen tables or so the whole
+  schema fits in the prompt, so an index adds a build step without adding recall.
+  Any object with `count()` and `search(question, n)` works as a retriever.
+- **Hints.** `Pipeline.ask(question, hints=[...])` shows the application's notes about
+  the question to the table-selection and SQL steps, such as which database value a name
+  refers to. Without hints the prompts are unchanged.
+
+```python
+from text2sql.analysis import Analyst
+from text2sql.config import Settings
+from text2sql.db import read_schema
+from text2sql.generation import SQLGenerator
+from text2sql.pipeline import Pipeline
+from text2sql.retrieval import AllTablesRetriever, TableSelector
+
+settings = Settings(db_path="data/chinook.db")
+schemas = read_schema(settings.db_path, settings.sample_rows)
+sql_llm, helper = MyLLM("a strong model"), MyLLM("a fast model")  # your LLM subclasses
+pipeline = Pipeline(
+    settings,
+    schemas,
+    AllTablesRetriever(schemas),
+    TableSelector(helper),
+    SQLGenerator(sql_llm, settings.sql_dialect, settings.sample_rows),
+    Analyst(helper, settings.analysis_rows),
+)
+result = pipeline.ask(
+    "Which 5 artists have the most tracks?", hints=["'AC/DC' is Artist.Name = 'AC/DC'"]
+)
+print(result.sql, result.result.rows if result.ok else result.message)
+```
 
 ---
 
