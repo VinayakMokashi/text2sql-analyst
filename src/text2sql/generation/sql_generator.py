@@ -8,6 +8,7 @@ generate -> validate -> execute -> repair loop.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from text2sql.db.schema import TableSchema
@@ -104,16 +105,25 @@ class SQLGenerator:
         self.dialect = dialect
         self.sample_rows = sample_rows
 
-    def generate(self, question: str, tables: list[TableSchema]) -> GeneratedSQL:
-        system, user = sql_generation_prompt(question, tables, self.dialect, self.sample_rows)
+    def generate(
+        self, question: str, tables: list[TableSchema], hints: Sequence[str] = ()
+    ) -> GeneratedSQL:
+        system, user = sql_generation_prompt(
+            question, tables, self.dialect, self.sample_rows, hints
+        )
         resp = self.llm.complete(system, user, max_tokens=2000)
         return parse_reply(resp.text, resp.latency_s)
 
     def repair(
-        self, question: str, tables: list[TableSchema], failed_sql: str, error: str
+        self,
+        question: str,
+        tables: list[TableSchema],
+        failed_sql: str,
+        error: str,
+        hints: Sequence[str] = (),
     ) -> GeneratedSQL:
         system, user = sql_repair_prompt(
-            question, tables, failed_sql, error, self.dialect, self.sample_rows
+            question, tables, failed_sql, error, self.dialect, self.sample_rows, hints
         )
         resp = self.llm.complete(system, user, max_tokens=2000)
         return parse_reply(resp.text, resp.latency_s)

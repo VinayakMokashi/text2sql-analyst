@@ -7,6 +7,7 @@ final schema small also makes the SQL prompt shorter and the SQL more accurate.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from text2sql.db.schema import TableSchema
@@ -38,6 +39,7 @@ class TableSelector:
         candidates: list[RetrievedTable],
         schemas: dict[str, TableSchema],
         max_tables: int,
+        hints: Sequence[str] = (),
     ) -> TableSelection:
         offered = [
             Candidate(c.name, c.description, schemas[c.name.lower()].column_names)
@@ -47,7 +49,7 @@ class TableSelector:
         offered_lower = {c.name.lower() for c in offered}
         others = sorted(s.name for key, s in schemas.items() if key not in offered_lower)
         system, user = table_selection_prompt(
-            question, offered, max_tables, others[:MAX_OTHER_TABLES]
+            question, offered, max_tables, others[:MAX_OTHER_TABLES], hints
         )
         reply = self._llm.complete(system, user, max_tokens=1000).text
         data = parse_json_object(reply)
