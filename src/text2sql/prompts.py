@@ -14,6 +14,15 @@ from text2sql.db.schema import TableSchema, quote_ident
 CANNOT_ANSWER = "CANNOT_ANSWER"
 
 
+def _hints_block(hints: Sequence[str], heading: str) -> str:
+    """Notes an application adds about the question, such as the database value a name
+    refers to ("'Coke' is companies.name = 'Coca-Cola'"); empty when there are none."""
+    items = [h.strip() for h in hints if h and h.strip()]
+    if not items:
+        return ""
+    return heading + "\n" + "\n".join(f"- {item}" for item in items)
+
+
 @dataclass(frozen=True)
 class Candidate:
     """A table offered to the table-selection step."""
@@ -48,6 +57,7 @@ def table_selection_prompt(
     candidates: Sequence[Candidate],
     max_tables: int,
     other_tables: Sequence[str] = (),
+    hints: Sequence[str] = (),
 ) -> tuple[str, str]:
     system = (
         "You are a database expert. You decide which tables are needed to answer a "
@@ -66,7 +76,9 @@ def table_selection_prompt(
         if other_tables
         else ""
     )
-    user = f"""Question: {question}
+    notes = _hints_block(hints, "Hints:")
+    notes = f"\n\n{notes}" if notes else ""
+    user = f"""Question: {question}{notes}
 
 Candidate tables:
 {listing}{others}
@@ -144,14 +156,17 @@ def sql_generation_prompt(
     tables: Sequence[TableSchema],
     dialect: str = "sqlite",
     sample_rows: int = 3,
+    hints: Sequence[str] = (),
 ) -> tuple[str, str]:
+    notes = _hints_block(hints, "### Hints")
+    notes = f"{notes}\n\n" if notes else ""
     user = f"""### Database schema ({dialect})
 {_schema_block(tables, sample_rows)}
 
 ### Join conditions
 {_join_hints(tables)}
 
-### Question
+{notes}### Question
 {question}"""
     return sql_system_prompt(dialect), user
 
@@ -163,9 +178,10 @@ def sql_repair_prompt(
     error: str,
     dialect: str = "sqlite",
     sample_rows: int = 3,
+    hints: Sequence[str] = (),
 ) -> tuple[str, str]:
     """Self-correction: show the model its own query and the database error."""
-    system, user = sql_generation_prompt(question, tables, dialect, sample_rows)
+    system, user = sql_generation_prompt(question, tables, dialect, sample_rows, hints)
     user += f"""
 
 ### Previous attempt

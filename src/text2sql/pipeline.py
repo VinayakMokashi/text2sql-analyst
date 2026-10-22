@@ -2,7 +2,8 @@
 
     question (a follow-up is first rewritten   conversation.FollowUpRewriter
               into a standalone question)
-      -> vector search (top-N tables)          retrieval.TableRetriever
+      -> candidate tables (top-N)              retrieval.TableRetriever (vector search)
+                                               or AllTablesRetriever (small schemas)
       -> LLM table selection (top-K)           retrieval.TableSelector
       -> add FK bridge tables                  retrieval.add_join_tables
       -> LLM writes SQL                        generation.SQLGenerator
@@ -10,7 +11,9 @@
            on error: LLM repairs the SQL, up to ``max_retries`` times
       -> LLM answer + analysis, chart choice   analysis.Analyst / suggest_chart
 
-The CLI, the Streamlit app and the evaluation script all call ``Pipeline.ask``.
+The CLI, the Streamlit app and the evaluation script all call ``Pipeline.ask``. An
+application can pass ``hints``, notes about the question such as the database value a
+name refers to; they are shown to the table-selection and SQL steps.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from text2sql.indexing.embeddings import Embedder
 from text2sql.llm import LLMError, create_llm
 from text2sql.retrieval import (
     RetrievedTable,
+    SchemaRetriever,
     TableRetriever,
     TableSelection,
     TableSelector,
@@ -68,6 +72,7 @@ class PipelineResult:
     timings: dict[str, float] = field(default_factory=dict)
     interpreted_as: str | None = None  # the standalone form of a follow-up question
     rate_limited: bool = False  # the error was the provider's rate limit or daily quota
+    hints: list[str] = field(default_factory=list)  # notes the caller added
 
     @property
     def ok(self) -> bool:
@@ -128,7 +133,7 @@ class Pipeline:
         self,
         settings: Settings,
         schemas: list[TableSchema],
-        retriever: TableRetriever,
+        retriever: SchemaRetriever,
         selector: TableSelector,
         generator: SQLGenerator,
         analyst: Analyst,
@@ -181,11 +186,15 @@ class Pipeline:
 
     # ------------------------------------------------------------------ public API
     def ask(
-        self, question: str, analyze: bool = True, history: Sequence[Turn] = ()
+        self,
+        question: str,
+        analyze: bool = True,
+        history: Sequence[Turn] = (),
+        hints: Sequence[str] = (),
     ) -> PipelineResult:
         """Answer one question. Never raises for model/SQL problems: failures come
         back as ``status="error"`` with a readable ``message``."""
-        out = PipelineResult(question=question.strip())
+        out = PipelineResult(question=question.strip(), hints=[h for h in hints if h.strip()])
         if not out.question:
             out.status, out.message = "error", "Please enter a question."
             return out
@@ -232,7 +241,7 @@ class Pipeline:
             return
         with self._timed(out, "table_selection"):
             out.selection = self.selector.select(
-                question, out.candidates, self._by_name, s.top_k_tables
+                question, out.candidates, self._by_name, s.top_k_tables, out.hints
             )
         if not out.selection.answerable:
             out.status = "unanswerable"
@@ -244,7 +253,7 @@ class Pipeline:
 
         # 3-4. Generate SQL, run it, and let the model repair its own errors.
         with self._timed(out, "sql_generation"):
-            generated = self.generator.generate(question, tables)
+            generated = self.generator.generate(question, tables, out.hints)
         for attempt_no in range(s.max_retries + 1):
             if self._declined(out, generated):
                 return
@@ -267,7 +276,7 @@ class Pipeline:
                     return
                 with self._timed(out, "sql_repair"):
                     generated = self.generator.repair(
-                        question, tables, generated.sql or "", str(exc)
+                        question, tables, generated.sql or "", str(exc), out.hints
                     )
 
         # 5. Explain the result and pick a chart.
