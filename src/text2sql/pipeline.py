@@ -13,7 +13,8 @@
 
 The CLI, the Streamlit app and the evaluation script all call ``Pipeline.ask``. An
 application can pass ``hints``, notes about the question such as the database value a
-name refers to; they are shown to the table-selection and SQL steps.
+name refers to; they are shown to the table-selection and SQL steps. A pipeline built
+with a ``linker`` (see ``text2sql.linking``) adds the linker's hints to every question.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from text2sql.execution import QueryError, QueryResult, execute_query
 from text2sql.generation import GeneratedSQL, SQLGenerator
 from text2sql.indexing import FastEmbedEmbedder, load_index_info, open_collection
 from text2sql.indexing.embeddings import Embedder
+from text2sql.linking import Linker
 from text2sql.llm import LLMError, create_llm
 from text2sql.retrieval import (
     RetrievedTable,
@@ -138,6 +140,7 @@ class Pipeline:
         generator: SQLGenerator,
         analyst: Analyst,
         rewriter: FollowUpRewriter | None = None,
+        linker: Linker | None = None,
     ) -> None:
         self.settings = settings
         self.schemas = schemas
@@ -147,6 +150,7 @@ class Pipeline:
         self.generator = generator
         self.analyst = analyst
         self.rewriter = rewriter
+        self.linker = linker
 
     @classmethod
     def from_settings(
@@ -228,6 +232,9 @@ class Pipeline:
             if standalone.strip() != out.question:
                 out.interpreted_as = standalone.strip()
         question = out.asked
+        if self.linker is not None:
+            with self._timed(out, "value_linking"):
+                out.hints = [*self.linker.hints(question), *out.hints]
 
         # 1-2. Schema linking: recall-oriented vector search, then LLM precision.
         with self._timed(out, "retrieval"):
