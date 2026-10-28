@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from text2sql.db.connection import connect_readonly
+from text2sql.db.postgres import is_postgres_url
 from text2sql.execution.guardrails import DENIED_FUNCTIONS, QueryError, validate_sql
 
 # Largest single string or blob a query may produce. Without it, one expression such as
@@ -44,6 +45,10 @@ class QueryResult:
     rows: list[tuple[Any, ...]]
     truncated: bool  # True if more rows existed than max_rows
     elapsed_s: float
+    # The SQL the server ran, when it was translated from ``sql`` (PostgreSQL); ``sql``
+    # stays the query as written in the pipeline's dialect, which repairs and the
+    # analysis prompt quote.
+    executed_sql: str | None = None
 
     @property
     def row_count(self) -> int:
@@ -95,7 +100,14 @@ def execute_query(
 
     Timeout: SQLite has no statement timeout, but it calls a "progress handler" every
     N virtual-machine instructions; returning non-zero from it aborts the query.
+
+    ``db_path`` may also be a PostgreSQL URL: the query is then translated from
+    ``dialect`` and runs on the server (``text2sql.execution.postgres``).
     """
+    if is_postgres_url(db_path):
+        from text2sql.execution.postgres import execute_postgres_query
+
+        return execute_postgres_query(str(db_path), sql, max_rows, timeout_s, dialect)
     safe_sql = validate_sql(sql, dialect)
     conn = connect_readonly(db_path)
     conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)

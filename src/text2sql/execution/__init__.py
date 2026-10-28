@@ -7,6 +7,7 @@ from text2sql.execution.executor import (
     execute_query,
 )
 from text2sql.execution.guardrails import QueryError, UnsafeSQLError, validate_sql
+from text2sql.execution.postgres import execute_postgres_query, to_postgres
 
 __all__ = [
     "QueryError",
@@ -14,6 +15,8 @@ __all__ = [
     "QueryTimeoutError",
     "SQLExecutionError",
     "UnsafeSQLError",
+    "execute_postgres_query",
     "execute_query",
+    "to_postgres",
     "validate_sql",
 ]
