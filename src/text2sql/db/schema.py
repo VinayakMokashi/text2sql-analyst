@@ -89,7 +89,14 @@ class TableSchema:
 
 
 def read_schema(db_path: str | Path, sample_rows: int = 3) -> list[TableSchema]:
-    """Introspect every user table in ``db_path`` (SQLite internals are skipped)."""
+    """Introspect every user table in ``db_path`` (SQLite internals are skipped).
+
+    ``db_path`` may also be a PostgreSQL URL (``text2sql.db.postgres``).
+    """
+    from text2sql.db.postgres import is_postgres_url, read_postgres_schema
+
+    if is_postgres_url(db_path):
+        return read_postgres_schema(str(db_path), sample_rows)
     conn = connect_readonly(db_path)
     try:
         # ESCAPE: in LIKE, "_" matches any character, so 'sqlite_%' alone would also
