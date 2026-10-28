@@ -68,16 +68,17 @@ def connect_postgres(url: str, timeout_s: float | None = None) -> psycopg.Connec
         raise RuntimeError(
             "PostgreSQL needs the postgres extra: pip install 'text2sql-analyst[postgres]'"
         ) from exc
+    params = conninfo_to_dict(url)
     # Added to any options the URL already sets (a search_path, say), not in their place.
-    options = [
-        str(conninfo_to_dict(url).get("options") or ""),
-        "-c default_transaction_read_only=on",
-    ]
+    options = [str(params.get("options") or ""), "-c default_transaction_read_only=on"]
     if timeout_s is not None:
         options.append(f"-c statement_timeout={max(1, round(timeout_s * 1000))}")
+    # Ten seconds to connect unless the URL says otherwise (?connect_timeout=2 for a
+    # server that is often stopped, so a fallback takes over quickly).
+    extra = {} if "connect_timeout" in params else {"connect_timeout": 10}
     try:
         return psycopg.connect(
-            url, options=" ".join(o for o in options if o), autocommit=True, connect_timeout=10
+            url, options=" ".join(o for o in options if o), autocommit=True, **extra
         )
     except psycopg.OperationalError as exc:
         # The driver's message names the host, and this one may reach an app's users.
