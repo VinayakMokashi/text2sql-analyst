@@ -222,8 +222,8 @@ python -m venv .venv
 pip install -e ".[all,dev]"    # or: pip install -r requirements.txt && pip install -e .
 ```
 
-`all` adds the vector index (ChromaDB, the `index` extra) and the Streamlit app (`app`);
-the pipeline itself needs neither ([Use it as a library](#use-it-as-a-library)).
+`all` adds the vector index (ChromaDB, the `index` extra), the Streamlit app (`app`) and
+the PostgreSQL driver (`postgres`); the pipeline itself needs none of them ([Use it as a library](#use-it-as-a-library)).
 
 ### 2. Get a free LLM API key (Groq)
 
@@ -389,7 +389,9 @@ and without the app or the vector index:
 
 ```bash
 pip install "text2sql-analyst @ git+https://github.com/VinayakMokashi/text2sql-analyst"
-# add [index] for the vector index of table descriptions, [app] for the Streamlit app
+# add [index] for the vector index of table descriptions, [app] for the Streamlit app,
+# [postgres] for PostgreSQL,
+# [postgres] for PostgreSQL
 ```
 
 Three hooks make that work:
@@ -447,6 +449,92 @@ linker = StaticLinker(
 )
 pipeline = Pipeline(settings, schemas, ..., linker=linker)  # the other parts as above
 ```
+
+### Run the queries on PostgreSQL
+
+The same pipeline can query a PostgreSQL database. Install the `postgres` extra and give
+it a URL:
+
+```bash
+pip install -e ".[postgres]"
+# in .env
+T2S_DB_URL=postgresql://reader:password@localhost:5432/shop
+```
+
+Schema introspection, value linking, the index and the queries then use the server:
+`read_schema`, `ColumnCatalogue.read` and `execute_query` accept a URL wherever they
+accept a file. The model keeps writing SQL in `T2S_SQL_DIALECT`, SQLite by default, and
+each query is translated with sqlglot before it runs. sqlglot keeps NULLs sorting
+first, makes division by zero return NULL and translates string and date functions;
+rules of this project's own cover the rest:
+
+| In SQLite | On PostgreSQL |
+|---|---|
+| `LIKE` ignores ASCII case | `ILIKE` |
+| `REAL` is an 8-byte float | `DOUBLE PRECISION` |
+| `ROUND(x, 2)` rounds a float | `ROUND(CAST(x AS NUMERIC), 2)` |
+| A comparison counts as 0 or 1 in `SUM` and `AVG` | cast to `INT` |
+| `TOTAL(x)` never returns NULL | `CAST(COALESCE(SUM(x), 0) AS DOUBLE PRECISION)` |
+| An expression column is named by its text | aliased with that text |
+
+`QueryResult.sql` stays the query as the model wrote it, which the repair step and the
+analysis quote; `QueryResult.executed_sql` is what PostgreSQL ran. Keeping the model in
+one dialect means prompts that were evaluated on SQLite need no new evaluation when the
+data moves to a server. Set `T2S_SQL_DIALECT=postgres` to have the model write
+PostgreSQL directly instead.
+
+- **Another backend, or a fallback.** `Pipeline(..., executor=...)` takes any callable
+  `(sql, max_rows, timeout_s, dialect) -> QueryResult`; the default runs
+  `execute_query` on `T2S_DB_URL` or `T2S_DB_PATH`.
+- **A server that is down** raises `DatabaseUnavailableError`, and the pipeline stops
+  instead of asking the model to repair a query that was never at fault. The message
+  names no host, since it may reach an app's users.
+- **Text order.** For SQLite's byte order in `ORDER BY` and in value catalogues, create
+  the database with the `C` collation
+  (`CREATE DATABASE shop TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'`).
+
+### Run the queries on PostgreSQL
+
+The same pipeline can query a PostgreSQL database. Install the `postgres` extra and give
+it a URL:
+
+```bash
+pip install -e ".[postgres]"
+# in .env
+T2S_DB_URL=postgresql://reader:password@localhost:5432/shop
+```
+
+Schema introspection, value linking, the index and the queries then use the server:
+`read_schema`, `ColumnCatalogue.read` and `execute_query` accept a URL wherever they
+accept a file. The model keeps writing SQL in `T2S_SQL_DIALECT`, SQLite by default, and
+each query is translated with sqlglot before it runs. sqlglot keeps NULLs sorting
+first, makes division by zero return NULL and translates string and date functions;
+rules of this project's own cover the rest:
+
+| In SQLite | On PostgreSQL |
+|---|---|
+| `LIKE` ignores ASCII case | `ILIKE` |
+| `REAL` is an 8-byte float | `DOUBLE PRECISION` |
+| `ROUND(x, 2)` rounds a float | `ROUND(CAST(x AS NUMERIC), 2)` |
+| A comparison counts as 0 or 1 in `SUM` and `AVG` | cast to `INT` |
+| `TOTAL(x)` never returns NULL | `CAST(COALESCE(SUM(x), 0) AS DOUBLE PRECISION)` |
+| An expression column is named by its text | aliased with that text |
+
+`QueryResult.sql` stays the query as the model wrote it, which the repair step and the
+analysis quote; `QueryResult.executed_sql` is what PostgreSQL ran. Keeping the model in
+one dialect means prompts that were evaluated on SQLite need no new evaluation when the
+data moves to a server. Set `T2S_SQL_DIALECT=postgres` to have the model write
+PostgreSQL directly instead.
+
+- **Another backend, or a fallback.** `Pipeline(..., executor=...)` takes any callable
+  `(sql, max_rows, timeout_s, dialect) -> QueryResult`; the default runs
+  `execute_query` on `T2S_DB_URL` or `T2S_DB_PATH`.
+- **A server that is down** raises `DatabaseUnavailableError`, and the pipeline stops
+  instead of asking the model to repair a query that was never at fault. The message
+  names no host, since it may reach an app's users.
+- **Text order.** For SQLite's byte order in `ORDER BY` and in value catalogues, create
+  the database with the `C` collation
+  (`CREATE DATABASE shop TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'`).
 
 ---
 
@@ -704,6 +792,24 @@ The query runs against the database only after three independent layers:
    `hex(zeroblob(...))` cannot build a gigabyte string), and a progress handler aborts any
    query that runs longer than `T2S_QUERY_TIMEOUT_S` (default 10 s).
 
+**On PostgreSQL** the server provides the second and third layers: every transaction is
+read-only (`default_transaction_read_only`), `statement_timeout` cancels a query that
+runs past `T2S_QUERY_TIMEOUT_S`, and at most `T2S_MAX_ROWS` + 1 rows are fetched. The
+static checks also refuse functions that sleep, read server files, run other queries,
+signal other sessions or change settings (`pg_sleep`, `pg_read_file`, `dblink`,
+`query_to_xml`, `set_config`, ...), and string builders that can make a value of a
+gigabyte (`repeat`, `lpad`, `rpad`). Connect as a role that is granted `SELECT` on the
+tables it needs and nothing else.
+
+**On PostgreSQL** the server provides the second and third layers: every transaction is
+read-only (`default_transaction_read_only`), `statement_timeout` cancels a query that
+runs past `T2S_QUERY_TIMEOUT_S`, and at most `T2S_MAX_ROWS` + 1 rows are fetched. The
+static checks also refuse functions that sleep, read server files, run other queries,
+signal other sessions or change settings (`pg_sleep`, `pg_read_file`, `dblink`,
+`query_to_xml`, `set_config`, ...), and string builders that can make a value of a
+gigabyte (`repeat`, `lpad`, `rpad`). Connect as a role that is granted `SELECT` on the
+tables it needs and nothing else.
+
 Rejected queries return a readable error. The pipeline feeds that error back to the
 model once or twice to fix, and then stops.
 
@@ -729,11 +835,11 @@ text2sql-analyst/
 │   ├── cli.py               # python -m text2sql {index,ask,chat,tables,models}
 │   ├── evaluation.py        # execution-accuracy matching, table recall
 │   ├── llm/                 # provider interface: OpenAI-compatible client, fake LLM, factory
-│   ├── db/                  # read-only connection, schema introspection
+│   ├── db/                  # read-only connections (SQLite, PostgreSQL), schema introspection
 │   ├── indexing/            # table descriptions, local embeddings, Chroma index
 │   ├── retrieval/           # vector search, LLM table selection, join-path expansion
 │   ├── generation/          # SQL generation, extraction and repair
-│   ├── execution/           # sqlglot guardrails, read-only executor
+│   ├── execution/           # sqlglot guardrails, read-only executors, SQLite -> PostgreSQLs, SQLite -> PostgreSQL
 │   └── analysis/            # answer + analysis, column roles, chart picker
 ├── app/                     # Streamlit web UI + bundled sample-table descriptions
 ├── scripts/download_sample_db.py   # Chinook or Sakila
@@ -744,7 +850,7 @@ text2sql-analyst/
 ### Tests
 
 ```bash
-pytest          # about 180 tests, a few seconds, no network or API key needed
+pytest          # about 230 tests, a few seconds, no network or API key needed
 ruff check .
 ```
 
@@ -754,6 +860,18 @@ guardrails (including attempted writes, multi-statement injection, `ATTACH`/`PRA
 data-modifying CTEs, the SQLite authorizer and timeouts), retrieval and selection,
 prompt building, the self-correction loop, abstention, follow-up rewriting, the chart
 rules, the evaluation metric, and the demo's self-setup and question budget.
+
+Twenty of them run against a real PostgreSQL server when `T2S_TEST_POSTGRES_URL` names
+one, and are skipped otherwise; CI starts a throwaway server for them. They load the
+shop data into SQLite and PostgreSQL side by side and require the same rows and column
+names from both, and check read-only connections, timeouts, the row cap, schema
+introspection and value linking on the server.
+
+Twenty of them run against a real PostgreSQL server when `T2S_TEST_POSTGRES_URL` names
+one, and are skipped otherwise; CI starts a throwaway server for them. They load the
+shop data into SQLite and PostgreSQL side by side and require the same rows and column
+names from both, and check read-only connections, timeouts, the row cap, schema
+introspection and value linking on the server.
 
 ---
 
@@ -795,7 +913,7 @@ rules, the evaluation metric, and the demo's self-setup and question budget.
 - Retrieve **few-shot examples** (similar question → SQL pairs) into the prompt
 - **Value retrieval**: index distinct column values to fix misspelled filters
 - **Self-consistency**: generate several queries and keep the answer most of them agree on
-- PostgreSQL / DuckDB executors
+- A DuckDB executor
 - Caching of repeated questions and a query history view
 
 ---
