@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
+import time
 import uuid
 from functools import partial
 
@@ -166,6 +167,14 @@ def test_an_unreachable_server_is_reported_without_its_address():
     with pytest.raises(DatabaseUnavailableError) as info:
         connect_postgres("postgresql://u:secret@127.0.0.1:1/db")
     assert "127.0.0.1" not in str(info.value) and "secret" not in str(info.value)
+
+
+def test_a_url_can_shorten_the_connect_timeout():
+    # A blackholed address: without the URL's own timeout this would wait ten seconds.
+    start = time.monotonic()
+    with pytest.raises(DatabaseUnavailableError):
+        connect_postgres("postgresql://u:p@10.255.255.1:5432/db?connect_timeout=1")
+    assert time.monotonic() - start < 5
 
 
 def test_pipeline_stops_without_repairs_when_the_server_is_down(make_pipeline):
