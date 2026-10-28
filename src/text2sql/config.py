@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values, find_dotenv
 from pydantic import Field, SecretStr
@@ -73,6 +74,11 @@ class Settings(BaseSettings):
 
     # --- Data & index -----------------------------------------------------------------
     db_path: Path = Path("data/chinook.db")
+    db_url: str | None = Field(
+        None,
+        description="A PostgreSQL URL; when set, the pipeline reads and queries it instead "
+        "of db_path. SQL is still written in sql_dialect and translated (postgres extra).",
+    )
     index_dir: Path = Path("data/index")
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     model_cache_dir: Path = Path("data/models")
@@ -94,8 +100,16 @@ class Settings(BaseSettings):
     demo_session_limit: int | None = Field(None, ge=0, description="Questions per visitor.")
 
     @property
+    def db_target(self) -> str | Path:
+        """What the pipeline reads and queries: the PostgreSQL URL if set, else the file."""
+        return self.db_url or self.db_path
+
+    @property
     def db_index_dir(self) -> Path:
         """Per-database index folder, so several databases can be indexed side by side."""
+        if self.db_url:
+            name = urlsplit(self.db_url).path.rsplit("/", 1)[-1] or "postgres"
+            return self.index_dir / name
         return self.index_dir / self.db_path.stem
 
 

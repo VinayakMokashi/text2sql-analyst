@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Protocol
 
 from text2sql.db.connection import connect_readonly
+from text2sql.db.postgres import fetch_rows, is_postgres_url
 from text2sql.db.schema import quote_ident
 
 MAX_CATALOGUE = 200
@@ -43,6 +44,8 @@ def sql_literal(value: str) -> str:
 
 
 def _distinct(db_path: str | Path, sql: str) -> list[tuple[object, ...]]:
+    if is_postgres_url(db_path):
+        return fetch_rows(str(db_path), sql)
     conn = connect_readonly(db_path)
     try:
         return [tuple(row) for row in conn.execute(sql).fetchall()]

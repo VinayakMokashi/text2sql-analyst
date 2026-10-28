@@ -23,7 +23,7 @@ from rich.table import Table
 
 from text2sql.config import Settings
 from text2sql.conversation import Turn
-from text2sql.db import read_schema
+from text2sql.db import database_id, read_schema
 from text2sql.indexing import build_index, load_descriptions
 from text2sql.llm import LLMError, create_llm
 from text2sql.llm.openai_compat import OpenAICompatibleLLM
@@ -49,14 +49,14 @@ def _settings(args: argparse.Namespace) -> Settings:
 # ------------------------------------------------------------------------ commands
 def cmd_index(args: argparse.Namespace) -> int:
     s = _settings(args)
-    tables = read_schema(s.db_path, s.sample_rows)
+    tables = read_schema(s.db_target, s.sample_rows)
     # The fake provider answers every prompt with "SELECT 1"; caching that as a table
     # description would poison later runs with a real model, so use templates instead.
     use_llm = not args.no_llm and s.llm_provider.lower() != "fake"
     llm = create_llm(s, "helper") if use_llm else None
     source = "template text" if llm is None else llm.model
     console.print(
-        f"Indexing [bold]{len(tables)}[/] tables from {escape(str(s.db_path))} "
+        f"Indexing [bold]{len(tables)}[/] tables from {escape(database_id(s.db_target))} "
         f"(new descriptions by {escape(source)}; existing ones are reused"
         f"{' unless --refresh' if not args.refresh else ''})"
     )
@@ -66,7 +66,7 @@ def cmd_index(args: argparse.Namespace) -> int:
         tables, s.db_index_dir, embedder, llm,
         refresh_descriptions=args.refresh,
         on_progress=lambda msg: console.print(f"  {escape(msg)}"),
-        db_path=s.db_path,
+        db_path=s.db_target,
         force=args.force,
     )  # fmt: skip
     console.print(
@@ -79,7 +79,7 @@ def cmd_tables(args: argparse.Namespace) -> int:
     s = _settings(args)
     docs = load_descriptions(s.db_index_dir)
     table = Table("Table", "Rows", "Description", show_lines=True)
-    for t in read_schema(s.db_path, sample_rows=0):
+    for t in read_schema(s.db_target, sample_rows=0):
         description = escape(docs[t.name]) if t.name in docs else "[dim](not indexed)[/]"
         table.add_row(escape(t.name), f"{t.row_count:,}", description)
     console.print(table)
