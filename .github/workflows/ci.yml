@@ -1,5 +1,6 @@
 # Lint and test on every push and pull request. The test suite needs no API key or
-# network access (it uses a fake LLM and a hashing embedder), so it runs anywhere.
+# network access (it uses a fake LLM and a hashing embedder), so it runs anywhere; the
+# PostgreSQL tests use a throwaway server started as a service.
 name: CI
 
 on:
@@ -14,6 +15,22 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: t2s
+          POSTGRES_PASSWORD: t2s
+          POSTGRES_DB: t2s_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U t2s -d t2s_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      T2S_TEST_POSTGRES_URL: postgresql://t2s:t2s@localhost:5432/t2s_test
     steps:
       - uses: actions/checkout@v4
 
