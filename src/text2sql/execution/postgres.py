@@ -8,8 +8,9 @@ moves to a server.
 from __future__ import annotations
 
 import time
+from collections.abc import Collection
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sqlglot
 from sqlglot import exp
@@ -23,6 +24,9 @@ from text2sql.execution.executor import (
     unique_column_names,
 )
 from text2sql.execution.guardrails import validate_sql
+
+if TYPE_CHECKING:
+    import psycopg
 
 
 def _sqlite_rule(node: exp.Expression) -> exp.Expression:
@@ -98,38 +102,101 @@ def _column_texts(sql: str, read: str) -> list[str] | None:
     return [sql[c[0].start : c[-1].end + 1] for c in columns if c]
 
 
-def _name_columns_like_sqlite(tree: exp.Expression, sql: str) -> None:
-    """Alias each unnamed expression column with its own text, as SQLite names it.
+def sqlite_column_names(sql: str) -> list[str | None] | None:
+    """What SQLite calls each result column of ``sql``.
 
-    SQLite calls ``ROUND(price / 7, 2)`` by that text; PostgreSQL would call it
-    ``round``. Column names reach charts and the analysis prompt, so they must match.
+    An alias keeps the case it was written in (PostgreSQL folds it to lower case), and
+    an expression is named by its source text (PostgreSQL would say ``round``). A column
+    reference gets None: SQLite and PostgreSQL both name it after the table's column.
+    Returns None when the list has a star, whose columns can't be paired up.
     """
+    selects = sqlglot.parse_one(sql, read="sqlite").selects
     texts = _column_texts(sql, "sqlite")
-    selects = tree.selects
     if texts is None or len(texts) != len(selects):
-        return
+        return None
+    names: list[str | None] = []
     for node, text in zip(selects, texts, strict=True):
-        if not isinstance(node, (exp.Alias, exp.Column, exp.Star)):
-            node.replace(exp.alias_(node.copy(), text, quoted=True))
+        if isinstance(node, exp.Star) or (
+            isinstance(node, exp.Column) and isinstance(node.this, exp.Star)
+        ):
+            return None
+        if isinstance(node, exp.Alias):
+            names.append(node.alias)
+        elif isinstance(node.unnest(), exp.Column):
+            names.append(None)
+        else:
+            names.append(text)
+    return names
 
 
-def to_postgres(sql: str, read: str = "sqlite") -> str:
+def _expand_alias_references(tree: exp.Expression, columns: Collection[str]) -> None:
+    """Put an alias's expression where WHERE or HAVING names the alias.
+
+    SQLite lets those clauses refer to a column alias of the same SELECT; PostgreSQL
+    doesn't. A name is replaced only when it is no column of the database (``columns``)
+    and no output of another SELECT in the query (a CTE or a subquery), since SQLite
+    reads a real column's name as that column.
+    """
+    selects = list(tree.find_all(exp.Select))
+    known = {c.lower() for c in columns}
+    for select in selects:
+        aliases = {
+            node.alias.lower(): node.this
+            for node in select.expressions
+            if isinstance(node, exp.Alias)
+        }
+        if not aliases:
+            continue
+        others = {n.lower() for s in selects if s is not select for n in s.named_selects}
+        for clause in (select.args.get("where"), select.args.get("having")):
+            if clause is None:
+                continue
+            for column in list(clause.find_all(exp.Column)):
+                name = column.name.lower()
+                if (
+                    column.table
+                    or name not in aliases
+                    or name in known
+                    or name in others
+                    or column.find_ancestor(exp.Select) is not select
+                ):
+                    continue
+                column.replace(aliases[name].copy())
+
+
+def to_postgres(sql: str, read: str = "sqlite", columns: Collection[str] | None = None) -> str:
     """Translate one query from ``read``'s dialect to PostgreSQL, keeping its meaning.
 
     sqlglot handles most of it (NULLs sort first in SQLite, division by zero gives NULL,
     string and date functions differ). Rules of our own cover the rest for SQLite:
     LIKE becomes ILIKE, REAL becomes DOUBLE PRECISION, ROUND(x, n) rounds a NUMERIC,
-    a comparison inside SUM or AVG counts as an integer, TOTAL() becomes a SUM, and
-    expression columns keep SQLite's names. PostgreSQL cuts names at 63 bytes, so a
-    longer expression's name can still differ.
+    a comparison inside SUM or AVG counts as an integer, and TOTAL() becomes a SUM.
+    Given the database's column names, an alias that WHERE or HAVING refers to is
+    replaced by its expression too. Result column names are kept by
+    ``execute_postgres_query`` (see ``sqlite_column_names``).
     """
     if read in ("postgres", "postgresql"):
         return sql
     tree = sqlglot.parse_one(sql, read=read)
     if read == "sqlite":
         tree = tree.transform(_sqlite_rule)
-        _name_columns_like_sqlite(tree, sql)
+        if columns is not None:
+            _expand_alias_references(tree, columns)
     return tree.sql(dialect="postgres")
+
+
+# Every column name in a database's current schema, read once per URL.
+_KNOWN_COLUMNS: dict[str, frozenset[str]] = {}
+_COLUMN_NAMES = """
+SELECT DISTINCT column_name FROM information_schema.columns
+WHERE table_schema = current_schema()
+"""
+
+
+def _known_columns(conn: psycopg.Connection[Any], url: str) -> frozenset[str]:
+    if url not in _KNOWN_COLUMNS:
+        _KNOWN_COLUMNS[url] = frozenset(r[0] for r in conn.execute(_COLUMN_NAMES).fetchall())
+    return _KNOWN_COLUMNS[url]
 
 
 def _plain(value: Any) -> Any:
@@ -148,19 +215,22 @@ def execute_postgres_query(
 
     ``sql`` in the result is the query as written; ``executed_sql`` is what PostgreSQL
     ran. As with SQLite, at most ``max_rows + 1`` rows are fetched, so the extra row
-    tells whether the result was cut.
+    tells whether the result was cut, and the columns carry SQLite's names.
     """
     safe_sql = validate_sql(sql, dialect)
-    pg_sql = validate_sql(to_postgres(safe_sql, read=dialect), "postgres")
+    # Checked before connecting too, so a refused query never reaches the server.
+    validate_sql(to_postgres(safe_sql, read=dialect), "postgres")
 
     import psycopg
 
     conn = connect_postgres(url, timeout_s)
     start = time.perf_counter()
     try:
+        known = _known_columns(conn, url)
+        pg_sql = validate_sql(to_postgres(safe_sql, read=dialect, columns=known), "postgres")
         cursor = conn.execute(pg_sql.encode())
         rows = cursor.fetchmany(max_rows + 1)
-        columns = unique_column_names([d.name for d in cursor.description or []])
+        names = [d.name for d in cursor.description or []]
     except psycopg.errors.QueryCanceled as exc:
         raise QueryTimeoutError(
             f"The query took longer than {timeout_s:g}s and was stopped."
@@ -172,9 +242,13 @@ def execute_postgres_query(
     finally:
         conn.close()
 
+    if dialect == "sqlite":
+        sqlite_names = sqlite_column_names(safe_sql)
+        if sqlite_names is not None and len(sqlite_names) == len(names):
+            names = [mine or theirs for mine, theirs in zip(sqlite_names, names, strict=True)]
     return QueryResult(
         sql=safe_sql,
-        columns=columns,
+        columns=unique_column_names(names),
         rows=[tuple(_plain(v) for v in row) for row in rows[:max_rows]],
         truncated=len(rows) > max_rows,
         elapsed_s=time.perf_counter() - start,
