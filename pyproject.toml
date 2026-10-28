@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text2sql-analyst"
-version = "0.3.0"
+version = "0.4.0"
 description = "Ask questions about a SQL database in plain English and get answers, analysis and charts."
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,9 @@ dependencies = [
 index = ["chromadb>=0.5"]
 # The Streamlit app.
 app = ["streamlit>=1.51", "altair>=5"]
-all = ["text2sql-analyst[index,app]"]
+# Querying a PostgreSQL database (T2S_DB_URL).
+postgres = ["psycopg[binary]>=3.2"]
+all = ["text2sql-analyst[index,app,postgres]"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
