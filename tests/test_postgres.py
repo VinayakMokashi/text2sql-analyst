@@ -35,6 +35,7 @@ from text2sql.execution import (
     to_postgres,
     validate_sql,
 )
+from text2sql.execution.postgres import sqlite_column_names
 from text2sql.linking import ColumnCatalogue
 
 psycopg = pytest.importorskip("psycopg")
@@ -87,15 +88,37 @@ def test_sqlglot_keeps_sqlite_null_order_and_division():
     assert "NULLIF" in to_postgres("SELECT a / b AS x FROM t")
 
 
-def test_expression_columns_keep_sqlite_names():
-    sql = "SELECT ROUND( price/7 ,2 ), c.name, COUNT(*) AS n, 1 FROM t c GROUP BY c.name"
-    out = to_postgres(sql)
-    assert 'AS "ROUND( price/7 ,2 )"' in out and 'AS "1"' in out
-    assert "c.name," in out and "COUNT(*) AS n" in out
-    union = to_postgres("SELECT a + 1 FROM t UNION SELECT b FROM u")
-    assert union.startswith('SELECT a + 1 AS "a + 1" FROM t UNION SELECT b FROM u')
-    cte = to_postgres("WITH x AS (SELECT 1 AS v) SELECT DISTINCT v * 2 FROM x")
-    assert cte.endswith('SELECT DISTINCT v * 2 AS "v * 2" FROM x')
+def test_column_names_follow_sqlite():
+    sql = "SELECT ROUND( price/7 ,2 ), c.NAME, (price), COUNT(*) AS nOrders, 1 FROM t c"
+    assert sqlite_column_names(sql) == ["ROUND( price/7 ,2 )", None, None, "nOrders", "1"]
+    assert sqlite_column_names("SELECT a + 1 FROM t UNION SELECT b FROM u") == ["a + 1"]
+    assert sqlite_column_names("WITH x AS (SELECT 1 AS v) SELECT DISTINCT v * 2 FROM x") == [
+        "v * 2"
+    ]
+    assert sqlite_column_names("SELECT *, price FROM t") is None
+    assert sqlite_column_names("SELECT t.* FROM t") is None
+
+
+def test_alias_references_in_where_and_having_are_expanded():
+    sql = (
+        "SELECT name, SUM(v) AS total FROM t WHERE name <> 'x' "
+        "GROUP BY name HAVING total > 10 ORDER BY total"
+    )
+    out = to_postgres(sql, columns={"name", "v"})
+    assert "HAVING SUM(v) > 10" in out
+    assert out.endswith("ORDER BY total NULLS FIRST")  # PostgreSQL accepts aliases there
+    where = to_postgres("SELECT v * 2 AS dbl FROM t WHERE dbl > 1", columns={"v"})
+    assert "WHERE v * 2 > 1" in where
+
+
+def test_real_columns_and_cte_outputs_are_not_expanded():
+    # "v" is a column of the database: SQLite reads it as the column, not the alias.
+    assert "WHERE v > 1" in to_postgres("SELECT v * 2 AS v FROM t WHERE v > 1", columns={"v"})
+    # "w" is an output of the CTE, so the outer WHERE means the CTE's column.
+    cte = "WITH x AS (SELECT v AS w FROM t) SELECT w * 2 AS w FROM x WHERE w > 1"
+    assert "WHERE w > 1" in to_postgres(cte, columns={"v"})
+    # Without the database's columns nothing is expanded.
+    assert "HAVING n > 1" in to_postgres("SELECT COUNT(*) AS n FROM t HAVING n > 1")
 
 
 def test_postgres_sql_passes_through_unchanged():
@@ -229,6 +252,11 @@ SAME_RESULTS = [
     "SELECT c.name, SUM(p.price * oi.quantity) AS spent FROM customers c "
     "JOIN orders o USING (customer_id) JOIN order_items oi USING (order_id) "
     "JOIN products p USING (product_id) GROUP BY c.name ORDER BY spent DESC",
+    # Mixed-case aliases, a column named in another case, and aliases in HAVING and WHERE.
+    "SELECT c.NAME, COUNT(*) AS nOrders FROM customers c JOIN orders o USING (customer_id) "
+    "GROUP BY c.name HAVING nOrders > 0 ORDER BY nOrders DESC, c.name",
+    "SELECT title, price * 2 AS dblPrice FROM products WHERE dblPrice > 100 ORDER BY title",
+    "SELECT (price), price AS Price2 FROM products ORDER BY product_id",
 ]
 
 
