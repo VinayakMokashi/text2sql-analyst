@@ -24,11 +24,13 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Literal
+from functools import partial
+from typing import Literal, Protocol
 
 from text2sql.analysis import Analysis, Analyst, ChartSpec, suggest_chart
 from text2sql.config import Settings, get_settings
 from text2sql.conversation import FollowUpRewriter, Turn
+from text2sql.db.postgres import DatabaseUnavailableError, database_id
 from text2sql.db.schema import TableSchema, read_schema, schema_by_name
 from text2sql.execution import QueryError, QueryResult, execute_query
 from text2sql.generation import GeneratedSQL, SQLGenerator
@@ -46,6 +48,13 @@ from text2sql.retrieval import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class Executor(Protocol):
+    """Runs one query: guardrails, then a read-only, time-limited execution."""
+
+    def __call__(self, sql: str, max_rows: int, timeout_s: float, dialect: str) -> QueryResult: ...
+
 
 Status = Literal["ok", "unanswerable", "error"]
 
@@ -115,10 +124,11 @@ def check_index(settings: Settings) -> None:
     if not info:
         return  # an index built before this check existed; nothing to compare
     built_for = info.get("db_path")
-    if built_for and built_for != str(settings.db_path.resolve()):
+    target = database_id(settings.db_target)
+    if built_for and built_for != target:
         raise ValueError(
             f"The index in {settings.db_index_dir} was built for {built_for}, not "
-            f"{settings.db_path.resolve()}. Set T2S_INDEX_DIR to a different folder, "
+            f"{target}. Set T2S_INDEX_DIR to a different folder, "
             "or run `python -m text2sql index --force` to rebuild it for this database."
         )
     model = info.get("embedding_model")
@@ -141,8 +151,11 @@ class Pipeline:
         analyst: Analyst,
         rewriter: FollowUpRewriter | None = None,
         linker: Linker | None = None,
+        executor: Executor | None = None,
     ) -> None:
         self.settings = settings
+        # Runs a validated query: (sql, max_rows, timeout_s, dialect) -> QueryResult.
+        self.executor: Executor = executor or partial(execute_query, settings.db_target)
         self.schemas = schemas
         self._by_name = schema_by_name(schemas)
         self.retriever = retriever
@@ -163,10 +176,10 @@ class Pipeline:
     ) -> Pipeline:
         """Wire up real components. Model names can be overridden (used by the eval)."""
         s = settings or get_settings()
-        schemas = read_schema(s.db_path, s.sample_rows)
+        schemas = read_schema(s.db_target, s.sample_rows)
         check_index(s)
         not_indexed = RuntimeError(
-            f"No table index for {s.db_path.name} yet. Run `python -m text2sql index` first."
+            f"No table index for {s.db_index_dir.name} yet. Run `python -m text2sql index` first."
         )
         if not (s.db_index_dir / "chroma").exists():
             raise not_indexed
@@ -207,6 +220,9 @@ class Pipeline:
         except LLMError as exc:
             out.status, out.message = "error", f"The language model request failed: {exc}"
             out.rate_limited = exc.rate_limited
+        except DatabaseUnavailableError as exc:
+            # A server that is down: no repaired query would help, so stop here.
+            out.status, out.message = "error", str(exc)
         except Exception as exc:  # noqa: BLE001 - an app should report, not crash
             # Anything unexpected is a bug; the log keeps the traceback for fixing it.
             log.exception("Unexpected error while answering %r", out.question)
@@ -268,8 +284,8 @@ class Pipeline:
             out.attempts.append(attempt)
             try:
                 with self._timed(out, "execution"):
-                    out.result = execute_query(
-                        s.db_path, generated.sql or "", s.max_rows, s.query_timeout_s, s.sql_dialect
+                    out.result = self.executor(
+                        generated.sql or "", s.max_rows, s.query_timeout_s, s.sql_dialect
                     )
                 break
             except QueryError as exc:

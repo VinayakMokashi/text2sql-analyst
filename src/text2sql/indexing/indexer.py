@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from text2sql.db.postgres import database_id
 from text2sql.db.schema import TableSchema
 from text2sql.indexing.describe import describe_table, index_document
 from text2sql.indexing.embeddings import Embedder
@@ -89,19 +90,20 @@ def build_index(
     llm: LLM | None,
     refresh_descriptions: bool = False,
     on_progress: Callable[[str], None] | None = None,
-    db_path: Path | None = None,
+    db_path: Path | str | None = None,
     force: bool = False,
 ) -> list[IndexedTable]:
     """Describe, embed and store every table.
 
     Existing descriptions are reused unless ``refresh_descriptions`` is set, so
     re-indexing costs no LLM calls. ``force`` allows reusing a folder that was built
-    for a different database file (for example after moving the file).
+    for a different database file (for example after moving the file). ``db_path`` may
+    be a PostgreSQL URL, which the index records without its password.
     """
     if not tables:
         raise ValueError("The database has no tables to index.")
     info = load_index_info(index_dir)
-    source = str(db_path.resolve()) if db_path else None
+    source = database_id(db_path) if db_path else None
     if source and info.get("db_path") not in (None, source) and not force:
         raise ValueError(
             f"{index_dir} holds the index of {info['db_path']}. Set T2S_INDEX_DIR to "
